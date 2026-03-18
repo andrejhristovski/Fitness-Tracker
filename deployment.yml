@@ -3,7 +3,7 @@ version: '3.8'
 
 services:
   shema.fitnessapp:
-    image: ghcr.io/andrejhristovski/Fitness-Tracker:${BASE_SERVICE_IMAGE_TAG:-latest}
+    image: ghcr.io/andrejhristovski/andrejhristovski/fitness-tracker:latest
     container_name: shema.fitnessapp
     environment:
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
