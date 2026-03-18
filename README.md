@@ -1,36 +1,107 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Fitness Tracker
 
-## Getting Started
+A personal fitness tracking web app built with **Next.js** (App Router), **TypeScript**, **Tailwind CSS**, and **Supabase**. Track daily food intake, workouts, exercises, and body stats with email/password authentication.
 
-First, run the development server:
+## Features
+
+- **Auth**: Email/password sign up and sign in via Supabase Auth
+- **Food**: Log meals, save frequent foods, view daily calorie and macro totals
+- **Workouts**: Create sessions by date, add exercises (sets, reps, weight, notes)
+- **Stats**: Body weight history, workout frequency by week, nutrition daily totals
+- **Protected routes**: Only logged-in users can access `/app/*`
+- **Dark UI**: Mobile-first, modern dark theme
+
+## Setup
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Supabase project
+
+1. Create a project at [supabase.com](https://supabase.com).
+2. In the SQL Editor, run the schema: copy the contents of `supabase/schema.sql` and execute it.
+3. In Project Settings → API, copy the **Project URL** and **anon (public) key**.
+
+### 3. Environment variables
+
+Copy the example env file and fill in your Supabase credentials:
+
+```bash
+cp .env.local.example .env.local
+```
+
+Edit `.env.local`:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### 4. Run the app
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). You’ll be redirected to `/login`. Sign up, then you’ll be redirected to the dashboard at `/app`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+src/
+├── app/
+│   ├── app/              # Protected app (dashboard)
+│   │   ├── layout.tsx    # App shell + nav
+│   │   ├── page.tsx      # Food tab (default)
+│   │   ├── workouts/
+│   │   └── stats/
+│   ├── login/
+│   ├── signup/
+│   ├── layout.tsx
+│   └── page.tsx          # Redirects to /login or /app
+├── components/
+│   ├── app-nav.tsx       # Tabs + sign out
+│   ├── food/             # Food tab components
+│   ├── workouts/         # Workout components
+│   └── stats/            # Stats components
+├── lib/
+│   └── supabase/
+│       ├── client.ts     # Browser client
+│       ├── server.ts     # Server client
+│       └── middleware.ts # Session refresh + route protection
+├── types/
+│   └── database.ts       # DB types
+└── middleware.ts        # Auth middleware
+```
 
-## Learn More
+## Auth flow
 
-To learn more about Next.js, take a look at the following resources:
+- **`/`** → Redirects to `/login` (guest) or `/app` (logged in).
+- **`/login`, `/signup`** → Public. If already logged in, redirect to `/app`.
+- **`/app`, `/app/workouts`, `/app/stats`** → Protected. If not logged in, redirect to `/login?redirect=/app`.
+- After sign in, user is sent to `redirect` query param or `/app`.
+- Middleware refreshes the Supabase session and sets cookies on each request.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Database (Supabase)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Tables (all scoped by `user_id` via RLS):
 
-## Deploy on Vercel
+| Table             | Purpose                                  |
+|------------------|------------------------------------------|
+| `foods`          | Saved frequent foods (name, macros)      |
+| `food_entries`   | Logged food per day                      |
+| `workout_sessions` | One session per user per date         |
+| `exercise_entries` | Exercises in a session (name, sets, reps, weight, notes) |
+| `body_logs`      | Weight (and notes) per date              |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Run `supabase/schema.sql` in the Supabase SQL Editor to create tables, indexes, and RLS policies.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tech stack
+
+- **Next.js 16** (App Router)
+- **TypeScript**
+- **Tailwind CSS 4**
+- **Supabase** (Auth + Postgres)
