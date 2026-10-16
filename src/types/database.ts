@@ -33,6 +33,7 @@ export interface FoodEntry {
   fats: number;
   quantity: number;
   log_date: string;
+  meal_type: string | null;
   image_path: string | null;
   created_at: string;
 }

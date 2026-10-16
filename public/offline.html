@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0c0f" />
+    <title>Offline · Fitness Tracker</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0c0c0f; color: #fafafa; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
+      p { color: #71717a; margin: 0; }
+      button { margin-top: 12px; border: 0; border-radius: 12px; padding: 12px 20px; background: #22c55e; color: #fff; font-weight: 600; font-size: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 style="margin: 0; font-size: 22px">You're offline</h1>
+      <p>Fitness Tracker needs a connection to load your data.</p>
+      <button onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

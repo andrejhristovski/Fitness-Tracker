@@ -1,325 +1,282 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
-import type { Food, FoodEntry } from "@/types/database";
+import { useMemo, useState } from "react";
+import type { Food } from "@/types/database";
+import type { LibraryFood } from "@/lib/food-library";
 import { Modal } from "@/components/ui/modal";
-import { calculateNutrition } from "@/lib/food-utils";
-import { NutritionPreview } from "./nutrition-preview";
+import { calculateNutrition, formatAmount } from "@/lib/food-utils";
+import { MEAL_TYPES, type MealType } from "@/lib/meals";
 import { FoodImagePicker } from "./food-image-picker";
+import { FoodThumb } from "./food-thumb";
+import {
+  FoodSearchList,
+  MacroPreview,
+  chipClass,
+  defaultAmountFor,
+  fromFood,
+  inputClass,
+  perLabel,
+  presetsFor,
+  type Pickable,
+} from "./food-picker";
+
+export type NewEntry = {
+  food_id: string | null;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  quantity: number;
+  meal_type: MealType;
+  image_path: string | null;
+};
 
 interface AddMealModalProps {
   isOpen: boolean;
   onClose: () => void;
-  logDate: string;
   foods: Food[];
-  prefilledFood?: Food | null;
-  /** When set (e.g. from Most used), prefill amount in grams */
-  prefilledAmount?: number | null;
-  onAdded: (entry: FoodEntry) => void;
-  onOpenNewFoodType?: () => void;
+  /** Recently logged foods, most frequent first, with the last amount used. */
+  recent: { foodId: string; amount: number }[];
+  prefill: { food: Food; amount: number } | null;
+  defaultMeal: MealType;
+  onAdd: (entry: NewEntry) => Promise<boolean>;
+  /** Save a built-in library food to the user's foods (or return the existing one). */
+  onEnsureFood: (lib: LibraryFood) => Promise<Food | null>;
+  /** Mark a food as a Quick add favorite with this default amount. */
+  onFavorite: (food: Food, amount: number) => Promise<void>;
+  onOpenNewFoodType: () => void;
+  onCreateMeal: () => void;
 }
 
-type Mode = "template" | "custom";
+export function AddMealModal({ isOpen, onClose, ...rest }: AddMealModalProps) {
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Add food">
+      {/* Remount on every open so the form always starts fresh. */}
+      {isOpen && <AddMealForm key={rest.prefill?.food.id ?? "new"} onClose={onClose} {...rest} />}
+    </Modal>
+  );
+}
 
-export function AddMealModal({
-  isOpen,
+function AddMealForm({
   onClose,
-  logDate,
   foods,
-  prefilledFood,
-  prefilledAmount,
-  onAdded,
+  recent,
+  prefill,
+  defaultMeal,
+  onAdd,
+  onEnsureFood,
+  onFavorite,
   onOpenNewFoodType,
-}: AddMealModalProps) {
-  const [mode, setMode] = useState<Mode>("template");
-  const [selectedFoodId, setSelectedFoodId] = useState<string>("");
-  const [amount, setAmount] = useState("");
-  const [customName, setCustomName] = useState("");
-  const [customCalories, setCustomCalories] = useState("");
-  const [customProtein, setCustomProtein] = useState("");
-  const [customCarbs, setCustomCarbs] = useState("");
-  const [customFats, setCustomFats] = useState("");
-  const [selectedImagePath, setSelectedImagePath] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  onCreateMeal,
+}: Omit<AddMealModalProps, "isOpen">) {
+  const [tab, setTab] = useState<"foods" | "quick">("foods");
+  const [meal, setMeal] = useState<MealType>(defaultMeal);
+  const [selected, setSelected] = useState<Pickable | null>(prefill ? fromFood(prefill.food) : null);
+  const [amount, setAmount] = useState(prefill ? String(prefill.amount) : "");
+  const [quick, setQuick] = useState({ name: "", calories: "", protein: "", carbs: "", fats: "" });
+  const [image, setImage] = useState<string | null>(null);
+  const [favorite, setFavorite] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const selectedFood = foods.find((f) => f.id === selectedFoodId);
-  const amountNum = Number(amount) || 0;
-  const calculated =
-    mode === "template" && selectedFood && amountNum > 0
-      ? calculateNutrition(selectedFood, amountNum)
-      : null;
+  const recentAmount = useMemo(() => new Map(recent.map((r) => [r.foodId, r.amount])), [recent]);
 
-  useEffect(() => {
-    if (isOpen) {
-      setMode(prefilledFood ? "template" : "template");
-      setSelectedFoodId(prefilledFood?.id ?? foods[0]?.id ?? "");
-      setAmount(
-        prefilledAmount != null && prefilledAmount > 0
-          ? String(prefilledAmount)
-          : ""
-      );
-      setCustomName("");
-      setCustomCalories("");
-      setCustomProtein("");
-      setCustomCarbs("");
-      setCustomFats("");
-      setSelectedImagePath(prefilledFood?.image_path ?? null);
-    }
-  }, [isOpen, prefilledFood, prefilledAmount, foods]);
-
-  useEffect(() => {
-    if (isOpen && prefilledFood && !selectedFoodId) setSelectedFoodId(prefilledFood.id);
-  }, [isOpen, prefilledFood, selectedFoodId]);
-
-  const resetAndClose = () => {
-    setAmount("");
-    setCustomName("");
-    setCustomCalories("");
-    setCustomProtein("");
-    setCustomCarbs("");
-    setCustomFats("");
-    setSelectedImagePath(null);
-    onClose();
-  };
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-
-    if (mode === "template" && selectedFood && amountNum > 0) {
-      const nutrition = calculateNutrition(selectedFood, amountNum);
-      const { data, error } = await supabase
-        .from("food_entries")
-        .insert({
-          user_id: user.id,
-          food_id: selectedFood.id,
-          name: selectedFood.name,
-          calories: nutrition.calories,
-          protein: nutrition.protein,
-          carbs: nutrition.carbs,
-          fats: nutrition.fats,
-          quantity: amountNum,
-          log_date: logDate,
-          image_path: selectedImagePath || null,
-        })
-        .select()
-        .single();
-      if (!error && data) {
-        onAdded(data);
-        resetAndClose();
-      }
-      setLoading(false);
-      return;
-    }
-
-    if (mode === "custom") {
-      const cal = Number(customCalories) || 0;
-      const p = Number(customProtein) || 0;
-      const c = Number(customCarbs) || 0;
-      const f = Number(customFats) || 0;
-      const { data, error } = await supabase
-        .from("food_entries")
-        .insert({
-          user_id: user.id,
-          food_id: null,
-          name: customName.trim() || "Custom",
-          calories: cal,
-          protein: p,
-          carbs: c,
-          fats: f,
-          quantity: 1,
-          log_date: logDate,
-          image_path: selectedImagePath || null,
-        })
-        .select()
-        .single();
-      setLoading(false);
-      if (!error && data) {
-        onAdded(data);
-        resetAndClose();
-      }
-    }
+  function pick(item: Pickable) {
+    setSelected(item);
+    setAmount(String(defaultAmountFor(item, item.food && recentAmount.get(item.food.id))));
   }
 
-  const canSubmitTemplate =
-    mode === "template" && selectedFoodId && amountNum > 0;
-  const canSubmitCustom =
-    mode === "custom" && customName.trim();
+  const amountNum = Number(amount.replace(",", ".")) || 0;
+  const nutrition = selected && amountNum > 0 ? calculateNutrition(selected, amountNum) : null;
+  const quickNutrition = {
+    calories: Number(quick.calories) || 0,
+    protein: Number(quick.protein) || 0,
+    carbs: Number(quick.carbs) || 0,
+    fats: Number(quick.fats) || 0,
+  };
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    let ok = false;
+    if (tab === "foods" && selected && nutrition) {
+      // Built-in foods become one of the user's foods on first use, so favorites/editing work.
+      const food = selected.food ?? (selected.lib ? await onEnsureFood(selected.lib) : null);
+      ok =
+        !!food &&
+        (await onAdd({
+          food_id: food.id,
+          name: food.name,
+          ...calculateNutrition(food, amountNum),
+          quantity: amountNum,
+          meal_type: meal,
+          image_path: food.image_path,
+        }));
+      if (ok && favorite && food) await onFavorite(food, amountNum);
+    } else if (tab === "quick") {
+      ok = await onAdd({
+        food_id: null,
+        name: quick.name.trim() || "Quick entry",
+        ...quickNutrition,
+        quantity: 1,
+        meal_type: meal,
+        image_path: image,
+      });
+    }
+    setSaving(false);
+    if (ok) onClose();
+    else setError("Couldn't save. Try again.");
+  }
+
+  const canSubmit = tab === "foods" ? !!nutrition : quick.name.trim() !== "" || quickNutrition.calories > 0;
+  const isMeal = selected?.base_unit === "serving";
 
   return (
-    <Modal isOpen={isOpen} onClose={resetAndClose} title="Add meal">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="flex gap-2 rounded-xl bg-[var(--background)] p-1">
-          <button
-            type="button"
-            onClick={() => setMode("template")}
-            className={`flex-1 rounded-lg py-2 text-sm font-medium transition-colors ${
-              mode === "template"
-                ? "bg-[var(--card)] text-[var(--foreground)] shadow"
-                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-            }`}
-          >
-            From food type
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSubmit && !saving) submit();
+      }}
+    >
+      <div className="flex flex-wrap gap-2">
+        {MEAL_TYPES.map((m) => (
+          <button key={m.id} type="button" onClick={() => setMeal(m.id)} className={chipClass(meal === m.id)}>
+            {m.label}
           </button>
-          <button
-            type="button"
-            onClick={() => setMode("custom")}
-            className={`flex-1 rounded-lg py-2 text-sm font-medium transition-colors ${
-              mode === "custom"
-                ? "bg-[var(--card)] text-[var(--foreground)] shadow"
-                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-            }`}
-          >
-            Custom entry
-          </button>
-        </div>
+        ))}
+      </div>
 
-        {mode === "template" && (
-          <>
+      <div className="flex gap-1 rounded-xl bg-[var(--background)] p-1">
+        {(
+          [
+            ["foods", "Foods"],
+            ["quick", "Quick entry"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`flex-1 rounded-lg py-2 text-sm font-medium transition-colors ${
+              tab === id ? "bg-[var(--card-hover)] text-[var(--foreground)]" : "text-[var(--muted)] hover:text-[var(--foreground)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "foods" &&
+        (selected ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 rounded-xl bg-[var(--background)] p-3">
+              <FoodThumb name={selected.name} path={selected.image_path} size={44} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold">{selected.name}</p>
+                <p className="text-xs text-[var(--muted)]">
+                  {isMeal ? `${Math.round(selected.calories)} kcal per portion` : perLabel(selected)}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSelected(null)} className="text-sm font-medium text-[var(--accent)] hover:underline">
+                Change
+              </button>
+            </div>
+
             <div>
-              <label className="mb-1 block text-sm font-medium text-[var(--muted)]">
-                Food type
-              </label>
-              <select
-                value={selectedFoodId}
-                onChange={(e) => setSelectedFoodId(e.target.value)}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-              >
-                <option value="">Select…</option>
-                {foods.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} (per {f.base_amount}{f.base_unit})
-                  </option>
+              <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--background)] pr-4 focus-within:border-[var(--accent)]">
+                <input
+                  autoFocus
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  aria-label="Amount"
+                  className="w-full bg-transparent px-4 py-3 text-2xl font-semibold tabular-nums outline-none"
+                />
+                <span className="text-[var(--muted)]">{isMeal ? "portion" : selected.base_unit}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {presetsFor(selected).map((a) => (
+                  <button key={a} type="button" onClick={() => setAmount(String(a))} className={chipClass(amountNum === a)}>
+                    {isMeal ? `${a} ×` : formatAmount(a, selected.base_unit)}
+                  </button>
                 ))}
-              </select>
-              {onOpenNewFoodType && (
-                <button
-                  type="button"
-                  onClick={onOpenNewFoodType}
-                  className="mt-2 text-sm font-medium text-[var(--accent)] hover:underline"
-                >
-                  + New food type
-                </button>
-              )}
-            </div>
-            <div>
-              <label htmlFor="add-meal-amount" className="mb-1 block text-sm font-medium text-[var(--muted)]">
-                Amount ({selectedFood?.base_unit ?? "g"})
-              </label>
-              <input
-                id="add-meal-amount"
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="e.g. 150"
-                min={0.1}
-                step={0.1}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-              />
-            </div>
-            {calculated && (
-              <NutritionPreview
-                calories={calculated.calories}
-                protein={calculated.protein}
-                carbs={calculated.carbs}
-                fats={calculated.fats}
-              />
-            )}
-            <FoodImagePicker
-              value={selectedImagePath}
-              onChange={setSelectedImagePath}
-            />
-          </>
-        )}
-
-        {mode === "custom" && (
-          <>
-            <div>
-              <label htmlFor="custom-name" className="mb-1 block text-sm font-medium text-[var(--muted)]">
-                Name
-              </label>
-              <input
-                id="custom-name"
-                type="text"
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                placeholder="e.g. Restaurant meal"
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-              />
-            </div>
-            <div>
-              <p className="mb-2 text-sm font-medium text-[var(--muted)]">Total nutrition</p>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <input
-                  type="number"
-                  value={customCalories}
-                  onChange={(e) => setCustomCalories(e.target.value)}
-                  placeholder="Cal"
-                  min={0}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-                />
-                <input
-                  type="number"
-                  value={customProtein}
-                  onChange={(e) => setCustomProtein(e.target.value)}
-                  placeholder="Protein (g)"
-                  min={0}
-                  step={0.1}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-                />
-                <input
-                  type="number"
-                  value={customCarbs}
-                  onChange={(e) => setCustomCarbs(e.target.value)}
-                  placeholder="Carbs (g)"
-                  min={0}
-                  step={0.1}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-                />
-                <input
-                  type="number"
-                  value={customFats}
-                  onChange={(e) => setCustomFats(e.target.value)}
-                  placeholder="Fats (g)"
-                  min={0}
-                  step={0.1}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-2.5 focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-                />
               </div>
             </div>
-            <FoodImagePicker
-              value={selectedImagePath}
-              onChange={setSelectedImagePath}
-            />
-          </>
-        )}
 
-        <div className="flex gap-3 pt-2">
-          <button
-            type="button"
-            onClick={resetAndClose}
-            className="flex-1 rounded-xl border border-[var(--border)] px-4 py-2.5 font-medium transition-colors hover:bg-[var(--card-hover)]"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={
-              loading ||
-              (mode === "template" ? !canSubmitTemplate : !canSubmitCustom)
-            }
-            className="flex-1 rounded-xl bg-[var(--accent)] px-4 py-2.5 font-medium text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
-          >
-            {loading ? "Saving…" : "Add meal"}
-          </button>
+            {nutrition && <MacroPreview n={nutrition} />}
+
+            {!selected.food?.is_quick_add && (
+              <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                <input
+                  type="checkbox"
+                  checked={favorite}
+                  onChange={(e) => setFavorite(e.target.checked)}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+                Also add to Quick add with this amount
+              </label>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <FoodSearchList foods={foods} recent={recent} onPick={pick} />
+            <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--border)] pt-3">
+              <button type="button" onClick={onCreateMeal} className="text-sm font-medium text-[var(--accent)] hover:underline">
+                + Create a meal (e.g. oats + whey)
+              </button>
+              <button type="button" onClick={onOpenNewFoodType} className="text-sm font-medium text-[var(--muted)] hover:text-[var(--foreground)]">
+                + Custom food type
+              </button>
+            </div>
+          </div>
+        ))}
+
+      {tab === "quick" && (
+        <div className="space-y-3">
+          <input
+            placeholder="What did you eat? e.g. Restaurant burger"
+            value={quick.name}
+            onChange={(e) => setQuick({ ...quick, name: e.target.value })}
+            className={inputClass}
+          />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(
+              [
+                ["calories", "kcal"],
+                ["protein", "Protein g"],
+                ["carbs", "Carbs g"],
+                ["fats", "Fats g"],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key} className="block">
+                <span className="mb-1 block text-xs text-[var(--muted)]">{label}</span>
+                <input
+                  inputMode="decimal"
+                  value={quick[key]}
+                  onChange={(e) => setQuick({ ...quick, [key]: e.target.value })}
+                  placeholder="0"
+                  className={`${inputClass} tabular-nums`}
+                />
+              </label>
+            ))}
+          </div>
+          <FoodImagePicker value={image} onChange={setImage} label="Picture (optional)" />
         </div>
-      </form>
-    </Modal>
+      )}
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      {(tab === "quick" || selected) && (
+        <button
+          type="submit"
+          disabled={!canSubmit || saving}
+          className="w-full rounded-xl bg-[var(--accent)] py-3 font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
+        >
+          {saving ? "Adding…" : `Add to ${MEAL_TYPES.find((m) => m.id === meal)!.label}`}
+        </button>
+      )}
+    </form>
   );
 }

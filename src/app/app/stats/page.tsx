@@ -1,73 +1,68 @@
-import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
+import { fetchExerciseHistory } from "@/lib/exercise-history";
+import { goalsFromSettings } from "@/lib/nutrition-goals";
 import { StatsTab } from "@/components/stats/stats-tab";
+import type { BodyLog, ExerciseDefinition, UserSettings } from "@/types/database";
 
-async function getStatsData() {
+export default async function StatsPage() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user)
-    return { bodyLogs: [], foodEntries: [], sessions: [], currentWeightKg: null };
+  if (!user) return null;
 
-  const [bodyRes, foodRes, sessionsRes, settingsRes] = await Promise.all([
-    supabase
-      .from("body_logs")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("log_date", { ascending: false })
-      .limit(90),
+  // Enough history for the 90-day view plus the period before it.
+  const since = new Date();
+  since.setDate(since.getDate() - 200);
+  const sinceKey = since.toISOString().slice(0, 10);
+
+  const [foodRes, bodyRes, settingsRes, sessionsRes, definitionsRes, history] = await Promise.all([
     supabase
       .from("food_entries")
-      .select("log_date, calories, protein, carbs, fats, quantity")
+      .select("log_date, calories, protein, carbs, fats")
       .eq("user_id", user.id)
-      .order("log_date", { ascending: false })
-      .limit(500),
+      .gte("log_date", sinceKey),
+    supabase.from("body_logs").select("*").eq("user_id", user.id).order("log_date"),
+    supabase.from("user_settings").select("*").eq("user_id", user.id).maybeSingle(),
     supabase
       .from("workout_sessions")
-      .select("id, session_date, name")
+      .select("session_date, exercise_entries(id)")
       .eq("user_id", user.id)
-      .order("session_date", { ascending: false })
-      .limit(90),
-    supabase.from("user_settings").select("current_weight_kg").eq("user_id", user.id).maybeSingle(),
+      .gte("session_date", sinceKey),
+    supabase.from("exercise_definitions").select("*").eq("user_id", user.id),
+    fetchExerciseHistory(supabase, user.id),
   ]);
 
-  const bodyLogs = bodyRes.data ?? [];
-  const settings = settingsRes.data;
-  const currentWeightKg =
-    bodyLogs.length > 0 && bodyLogs[0].weight_kg != null
-      ? bodyLogs[0].weight_kg
-      : settings?.current_weight_kg ?? null;
+  // Daily nutrition totals.
+  const nutrition: Record<string, { calories: number; protein: number; carbs: number; fats: number }> = {};
+  for (const e of foodRes.data ?? []) {
+    const day = (nutrition[e.log_date] ??= { calories: 0, protein: 0, carbs: 0, fats: 0 });
+    day.calories += Number(e.calories);
+    day.protein += Number(e.protein);
+    day.carbs += Number(e.carbs);
+    day.fats += Number(e.fats);
+  }
 
-  return {
-    bodyLogs,
-    foodEntries: foodRes.data ?? [],
-    sessions: sessionsRes.data ?? [],
-    currentWeightKg,
-  };
-}
+  // A day counts as trained when it has a session with at least one exercise.
+  const trainedDays = [
+    ...new Set(
+      (sessionsRes.data ?? [])
+        .filter((s) => (s.exercise_entries ?? []).length > 0)
+        .map((s) => s.session_date as string)
+    ),
+  ];
 
-function StatsFallback() {
-  return (
-    <div className="space-y-6">
-      <div className="h-10 w-48 animate-pulse rounded-lg bg-[var(--card)]" />
-      <div className="h-48 animate-pulse rounded-xl bg-[var(--card)]" />
-      <div className="h-48 animate-pulse rounded-xl bg-[var(--card)]" />
-    </div>
-  );
-}
-
-export default async function StatsPage() {
-  const data = await getStatsData();
+  const settings = settingsRes.data as UserSettings | null;
 
   return (
-    <Suspense fallback={<StatsFallback />}>
-      <StatsTab
-        bodyLogs={data.bodyLogs}
-        foodEntries={data.foodEntries}
-        sessions={data.sessions}
-        currentWeightKg={data.currentWeightKg}
-      />
-    </Suspense>
+    <StatsTab
+      nutrition={nutrition}
+      goals={goalsFromSettings(settings)}
+      bodyLogs={(bodyRes.data ?? []) as BodyLog[]}
+      targetWeightKg={settings?.target_weight_kg ?? null}
+      trainedDays={trainedDays}
+      definitions={(definitionsRes.data ?? []) as ExerciseDefinition[]}
+      history={history}
+    />
   );
 }

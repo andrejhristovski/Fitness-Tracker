@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { BodyLog } from "@/types/database";
+import { localDate } from "@/lib/dates";
 
 interface AddBodyLogFormProps {
   onAdded: (log: BodyLog) => void;
@@ -10,7 +11,7 @@ interface AddBodyLogFormProps {
 
 export function AddBodyLogForm({ onAdded }: AddBodyLogFormProps) {
   const [logDate, setLogDate] = useState(
-    new Date().toISOString().slice(0, 10)
+    localDate()
   );
   const [weightKg, setWeightKg] = useState("");
   const [notes, setNotes] = useState("");
@@ -45,7 +46,7 @@ export function AddBodyLogForm({ onAdded }: AddBodyLogFormProps) {
       onAdded(data);
       setWeightKg("");
       setNotes("");
-      setLogDate(new Date().toISOString().slice(0, 10));
+      setLogDate(localDate());
     }
   }
 
