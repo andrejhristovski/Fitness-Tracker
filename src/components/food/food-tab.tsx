@@ -1,42 +1,64 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import type { Food, FoodEntry } from "@/types/database";
 import type { NutritionGoals } from "@/lib/nutrition-goals";
+import { createClient } from "@/lib/supabase/client";
 import { normalizeFood } from "@/lib/normalize-food";
-import { removeFavorite } from "@/app/actions/food-actions";
-import { DailyNutritionProgress } from "./daily-nutrition-progress";
-import { MostUsedCards } from "./most-used-cards";
-import { TodayEntriesCards } from "./today-entries-cards";
-import { AddMealModal } from "./add-meal-modal";
+import { calculateNutrition, formatAmount } from "@/lib/food-utils";
+import { addDays, parseDate } from "@/lib/dates";
+import { MEAL_TYPES, mealForNow, normalizeMealType, type MealType } from "@/lib/meals";
+import { removeFavorite, saveFavoriteFromTemplate } from "@/app/actions/food-actions";
+import { DaySummary } from "./day-summary";
+import { FoodThumb } from "./food-thumb";
+import { AddMealModal, type NewEntry } from "./add-meal-modal";
+import { EditEntryModal, type EntryUpdate } from "./edit-entry-modal";
 import { AddFavoriteModal } from "./add-favorite-modal";
 import { SaveFoodModal } from "./save-food-modal";
+import { CreateMealModal, type MealDraft } from "./create-meal-modal";
+import type { LibraryFood } from "@/lib/food-library";
 
 interface FoodTabProps {
   initialEntries: FoodEntry[];
   initialFoods: Food[];
-  initialGoals: NutritionGoals;
+  goals: NutritionGoals;
+  recent: { foodId: string; amount: number }[];
   logDate: string;
+  today: string;
 }
 
-export function FoodTab({
-  initialEntries,
-  initialFoods,
-  initialGoals,
-  logDate,
-}: FoodTabProps) {
-  const [entries, setEntries] = useState<FoodEntry[]>(initialEntries);
-  const [foods, setFoods] = useState<Food[]>(initialFoods);
-  const [goals] = useState<NutritionGoals>(initialGoals);
-  const [addMealOpen, setAddMealOpen] = useState(false);
-  const [addFavoriteOpen, setAddFavoriteOpen] = useState(false);
-  const [editingFavorite, setEditingFavorite] = useState<Food | null>(null);
+function dayLabel(date: string, today: string) {
+  if (date === today) return "Today";
+  if (date === addDays(today, -1)) return "Yesterday";
+  return parseDate(date).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+}
+
+function favoriteAmount(food: Food) {
+  return food.quick_add_amount && food.quick_add_amount > 0 ? food.quick_add_amount : food.base_amount;
+}
+
+export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, today }: FoodTabProps) {
+  const [entries, setEntries] = useState(initialEntries);
+  const [foods, setFoods] = useState(initialFoods);
+  const [addOpen, setAddOpen] = useState(false);
+  const [prefill, setPrefill] = useState<{ food: Food; amount: number } | null>(null);
+  const [defaultMeal, setDefaultMeal] = useState<MealType>(() => mealForNow());
+  const [editing, setEditing] = useState<FoodEntry | null>(null);
+  const [favoriteModal, setFavoriteModal] = useState<{ editing: Food | null } | null>(null);
   const [saveFoodOpen, setSaveFoodOpen] = useState(false);
-  const [addMealPrefilled, setAddMealPrefilled] = useState<Food | null>(null);
-  const [addMealPrefilledAmount, setAddMealPrefilledAmount] = useState<number | null>(null);
+  const [manage, setManage] = useState(false);
+  const [createMealOpen, setCreateMealOpen] = useState(false);
+  const [toast, setToast] = useState<{ text: string; undoId?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const mostUsedFoods = foods.filter((f) => f.is_quick_add === true);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
+  const favorites = foods.filter((f) => f.is_quick_add);
   const totals = entries.reduce(
     (acc, e) => ({
       calories: acc.calories + Number(e.calories),
@@ -47,115 +69,394 @@ export function FoodTab({
     { calories: 0, protein: 0, carbs: 0, fats: 0 }
   );
 
-  function openAddMeal(food?: Food, defaultAmount?: number) {
-    setAddMealPrefilled(food ?? null);
-    setAddMealPrefilledAmount(defaultAmount ?? null);
-    setAddMealOpen(true);
+  async function insertEntry(entry: NewEntry): Promise<FoodEntry | null> {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data, error: err } = await supabase
+      .from("food_entries")
+      .insert({ ...entry, user_id: user.id, log_date: logDate })
+      .select()
+      .single();
+    if (err || !data) {
+      setError(err?.message ?? "Couldn't save the entry.");
+      return null;
+    }
+    setEntries((prev) => [...prev, data as FoodEntry]);
+    return data as FoodEntry;
   }
 
+  /** Insert a food row for the user, or return the one they already have with that name. */
+  async function saveFood(row: Omit<Food, "id" | "user_id" | "created_at">): Promise<{ food: Food } | { error: string }> {
+    const existing = foods.find((f) => f.name.toLowerCase() === row.name.toLowerCase());
+    if (existing) return { food: existing };
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { error: "Not signed in" };
+    const { data, error: err } = await supabase.from("foods").insert({ ...row, user_id: user.id }).select().single();
+    if (err || !data) return { error: err?.message ?? "Couldn't save the food." };
+    const food = normalizeFood(data);
+    setFoods((prev) => [...prev, food].sort((a, b) => a.name.localeCompare(b.name)));
+    return { food };
+  }
+
+  async function ensureLibraryFood(lib: LibraryFood) {
+    const result = await saveFood({
+      name: lib.name,
+      base_amount: lib.base_amount,
+      base_unit: lib.base_unit,
+      calories: lib.calories,
+      protein: lib.protein,
+      carbs: lib.carbs,
+      fats: lib.fats,
+      image_path: lib.image_path,
+      is_quick_add: false,
+      quick_add_amount: null,
+    });
+    if ("error" in result) {
+      setError(result.error);
+      return null;
+    }
+    return result.food;
+  }
+
+  async function saveMeal(meal: MealDraft) {
+    if (foods.some((f) => f.name.toLowerCase() === meal.name.toLowerCase())) {
+      return `You already have a food called "${meal.name}". Pick another name.`;
+    }
+    const result = await saveFood({
+      ...meal,
+      base_amount: 1,
+      base_unit: "serving",
+      is_quick_add: true,
+      quick_add_amount: 1,
+    });
+    if ("error" in result) return result.error;
+    setToast({ text: `Saved "${meal.name}" — tap + in Quick add to log it` });
+    return null;
+  }
+
+  async function quickAdd(food: Food) {
+    const amount = favoriteAmount(food);
+    const meal = mealForNow();
+    const created = await insertEntry({
+      food_id: food.id,
+      name: food.name,
+      ...calculateNutrition(food, amount),
+      quantity: amount,
+      meal_type: meal,
+      image_path: food.image_path,
+    });
+    if (created) {
+      const label = MEAL_TYPES.find((m) => m.id === meal)!.label;
+      setToast({ text: `Added ${food.name} (${formatAmount(amount, food.base_unit)}) to ${label}`, undoId: created.id });
+    }
+  }
+
+  async function deleteEntry(id: string) {
+    const supabase = createClient();
+    const { error: err } = await supabase.from("food_entries").delete().eq("id", id);
+    if (err) {
+      setError(err.message);
+      return false;
+    }
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+    return true;
+  }
+
+  async function updateEntry(id: string, update: EntryUpdate) {
+    const supabase = createClient();
+    const { data, error: err } = await supabase.from("food_entries").update(update).eq("id", id).select().single();
+    if (err || !data) {
+      setError(err?.message ?? "Couldn't update the entry.");
+      return false;
+    }
+    setEntries((prev) => prev.map((e) => (e.id === id ? (data as FoodEntry) : e)));
+    return true;
+  }
+
+  function openAdd(meal: MealType, food?: Food) {
+    setDefaultMeal(meal);
+    setPrefill(food ? { food, amount: favoriteAmount(food) } : null);
+    setAddOpen(true);
+  }
+
+  const isToday = logDate === today;
+
   return (
-    <div className="mx-auto max-w-4xl space-y-8 pb-24">
-      {/* Header */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight">Nutrition</h1>
-        <p className="text-sm text-[var(--muted)]">{logDate}</p>
+    <div className="mx-auto max-w-4xl space-y-6 pb-28">
+      {/* Header + day switcher */}
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold tracking-tight">Food</h1>
+        <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
+          <Link
+            href={`/app?date=${addDays(logDate, -1)}`}
+            className="rounded-lg px-2.5 py-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]"
+            aria-label="Previous day"
+          >
+            ‹
+          </Link>
+          <span className="min-w-24 text-center text-sm font-medium">{dayLabel(logDate, today)}</span>
+          {isToday ? (
+            <span className="px-2.5 py-1.5 text-[var(--border)]" aria-hidden="true">
+              ›
+            </span>
+          ) : (
+            <Link
+              href={addDays(logDate, 1) >= today ? "/app" : `/app?date=${addDays(logDate, 1)}`}
+              className="rounded-lg px-2.5 py-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]"
+              aria-label="Next day"
+            >
+              ›
+            </Link>
+          )}
+        </div>
       </div>
 
-      {/* Daily progress */}
-      <section>
-        <DailyNutritionProgress totals={totals} goals={goals} />
-      </section>
+      {!isToday && (
+        <div className="flex items-center justify-between rounded-xl bg-[var(--accent)]/10 px-4 py-2 text-sm">
+          <span>You&apos;re editing a past day.</span>
+          <Link href="/app" className="font-medium text-[var(--accent)] hover:underline">
+            Back to today
+          </Link>
+        </div>
+      )}
 
-      {/* Most used – quick add */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-[var(--muted)]">
-            Most used
-          </h2>
-          <button
-            type="button"
-            onClick={() => {
-              setEditingFavorite(null);
-              setAddFavoriteOpen(true);
-            }}
-            className="rounded-lg border border-[var(--accent)] bg-[var(--accent)]/10 px-3 py-1.5 text-sm font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20"
-          >
-            Add favorite
+      {error && (
+        <div role="alert" className="flex items-start justify-between gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label="Dismiss">
+            ×
           </button>
         </div>
-        <MostUsedCards
-          foods={mostUsedFoods}
-          onAddClick={(food, defaultAmount) => openAddMeal(food, defaultAmount)}
-          onEdit={(food) => {
-            setEditingFavorite(food);
-            setAddFavoriteOpen(true);
-          }}
-          onRemove={async (food) => {
-            const result = await removeFavorite(food.id);
-            if (result.ok) setFoods((prev) => prev.map((f) => (f.id === food.id ? result.data : f)));
-          }}
-        />
-      </section>
+      )}
 
-      {/* Divider */}
-      <div className="border-t border-[var(--border)]" />
+      <DaySummary totals={totals} goals={goals} />
 
-      {/* Today&apos;s meals */}
+      {/* Favorites: one tap logs the usual amount */}
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-[var(--muted)]">
-          Today&apos;s meals
-        </h2>
-        <TodayEntriesCards
-          entries={entries}
-          onDeleted={(id) => setEntries((prev) => prev.filter((e) => e.id !== id))}
-        />
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="shrink-0 text-sm font-semibold uppercase tracking-wider text-[var(--muted)]">Quick add</h2>
+          <div className="flex gap-1.5 [&>button]:whitespace-nowrap [&>button]:px-2.5 sm:gap-2 sm:[&>button]:px-3">
+            {favorites.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setManage((m) => !m)}
+                className="rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
+              >
+                {manage ? "Done" : "Edit"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setFavoriteModal({ editing: null })}
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--card-hover)]"
+            >
+              + Favorite
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateMealOpen(true)}
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--card-hover)]"
+            >
+              + Meal
+            </button>
+          </div>
+        </div>
+        {favorites.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-[var(--border)] px-5 py-6 text-center text-sm text-[var(--muted)]">
+            Save foods or whole meals you eat often (e.g. 60 g oats + 30 g whey), then log them with one tap.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4">
+            {favorites.map((food) => {
+              const amount = favoriteAmount(food);
+              const kcal = Math.round(calculateNutrition(food, amount).calories);
+              return (
+                <div
+                  key={food.id}
+                  className="flex items-center gap-2.5 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-2.5 transition-colors hover:border-[var(--accent)]/40"
+                >
+                  <button type="button" onClick={() => openAdd(mealForNow(), food)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                    <FoodThumb name={food.name} path={food.image_path} size={40} />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{food.name}</span>
+                      <span className="block text-xs text-[var(--muted)]">
+                        {food.base_unit === "serving" ? "Meal" : formatAmount(amount, food.base_unit)} · {kcal} kcal
+                      </span>
+                    </span>
+                  </button>
+                  {manage ? (
+                    <span className="flex shrink-0 flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setFavoriteModal({ editing: food })}
+                        className="rounded-md px-1.5 text-xs text-[var(--muted)] hover:text-[var(--foreground)]"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const result = await removeFavorite(food.id);
+                          if (result.ok) setFoods((prev) => prev.map((f) => (f.id === food.id ? result.data : f)));
+                          else setError(result.error);
+                        }}
+                        className="rounded-md px-1.5 text-xs text-red-400"
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => quickAdd(food)}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-lg font-semibold text-white transition-colors hover:bg-[var(--accent-hover)]"
+                      aria-label={`Log ${food.name}`}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
-      {/* Floating Add Meal button */}
+      {/* Meals */}
+      <section className="space-y-3">
+        {MEAL_TYPES.map((meal) => {
+          const items = entries.filter((e) => normalizeMealType(e.meal_type) === meal.id);
+          const kcal = items.reduce((s, e) => s + Number(e.calories), 0);
+          return (
+            <div key={meal.id} className="rounded-2xl border border-[var(--border)] bg-[var(--card)]">
+              <div className="flex items-center justify-between px-4 py-3">
+                <div>
+                  <h3 className="font-semibold">{meal.label}</h3>
+                  <p className="text-xs text-[var(--muted)]">
+                    {items.length ? `${Math.round(kcal)} kcal · ${items.length} item${items.length > 1 ? "s" : ""}` : "Nothing yet"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openAdd(meal.id)}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10"
+                >
+                  + Add
+                </button>
+              </div>
+              {items.length > 0 && (
+                <ul className="border-t border-[var(--border)]">
+                  {items.map((e) => (
+                    <li key={e.id} className="border-b border-[var(--border)] last:border-b-0">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(e)}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--card-hover)]"
+                      >
+                        <FoodThumb name={e.name} path={e.image_path} size={36} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{e.name}</span>
+                          <span className="block text-xs text-[var(--muted)]">
+                            {e.food_id ? `${formatAmount(Number(e.quantity), foods.find((f) => f.id === e.food_id)?.base_unit ?? "g")} · ` : ""}
+                            P {Math.round(Number(e.protein))} · C {Math.round(Number(e.carbs))} · F {Math.round(Number(e.fats))}
+                          </span>
+                        </span>
+                        <span className="text-sm font-semibold tabular-nums">{Math.round(Number(e.calories))}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </section>
+
+      {/* Floating add button */}
       <button
         type="button"
-        onClick={() => openAddMeal()}
-        className="fixed bottom-6 right-6 z-40 flex h-14 items-center gap-2 rounded-2xl bg-[var(--accent)] px-5 py-3 font-semibold text-white shadow-lg transition-all hover:bg-[var(--accent-hover)] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[var(--background)]"
-        aria-label="Add meal"
+        onClick={() => openAdd(mealForNow())}
+        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 flex h-14 items-center gap-2 rounded-2xl sm:bottom-6 sm:right-6 bg-[var(--accent)] px-5 font-semibold text-white shadow-lg transition-colors hover:bg-[var(--accent-hover)]"
       >
-        <span className="text-xl">+</span>
-        <span>Add Meal</span>
+        <span className="text-xl leading-none">+</span> Add food
       </button>
 
-      {/* Modals */}
+      {toast && (
+        <div className="fixed bottom-[calc(9.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 sm:bottom-24 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--card-hover)] px-4 py-3 text-sm shadow-xl">
+          <span className="min-w-0 truncate">{toast.text}</span>
+          {toast.undoId && (
+            <button
+              type="button"
+              onClick={async () => {
+                const id = toast.undoId!;
+                setToast(null);
+                await deleteEntry(id);
+              }}
+              className="shrink-0 font-semibold text-[var(--accent)]"
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      )}
+
       <AddMealModal
-        isOpen={addMealOpen}
-        onClose={() => setAddMealOpen(false)}
-        logDate={logDate}
+        isOpen={addOpen}
+        onClose={() => setAddOpen(false)}
         foods={foods}
-        prefilledFood={addMealPrefilled}
-        prefilledAmount={addMealPrefilledAmount}
-        onAdded={(entry) => setEntries((prev) => [entry, ...prev])}
+        recent={recent}
+        prefill={prefill}
+        defaultMeal={defaultMeal}
+        onAdd={async (entry) => !!(await insertEntry(entry))}
+        onEnsureFood={ensureLibraryFood}
+        onFavorite={async (food, amount) => {
+          const result = await saveFavoriteFromTemplate(food.id, amount, food.image_path);
+          if (result.ok) setFoods((prev) => prev.map((f) => (f.id === food.id ? result.data : f)));
+          else setError(result.error);
+        }}
         onOpenNewFoodType={() => setSaveFoodOpen(true)}
+        onCreateMeal={() => {
+          setAddOpen(false);
+          setCreateMealOpen(true);
+        }}
+      />
+      <CreateMealModal isOpen={createMealOpen} onClose={() => setCreateMealOpen(false)} foods={foods} onSave={saveMeal} />
+      <EditEntryModal
+        entry={editing}
+        food={editing?.food_id ? foods.find((f) => f.id === editing.food_id) ?? null : null}
+        onClose={() => setEditing(null)}
+        onSave={async (update) => {
+          const ok = editing ? await updateEntry(editing.id, update) : false;
+          if (ok) setEditing(null);
+          return ok;
+        }}
+        onDelete={async () => {
+          if (editing && (await deleteEntry(editing.id))) setEditing(null);
+        }}
       />
       <AddFavoriteModal
-        isOpen={addFavoriteOpen}
-        onClose={() => {
-          setAddFavoriteOpen(false);
-          setEditingFavorite(null);
-        }}
+        isOpen={favoriteModal !== null}
+        onClose={() => setFavoriteModal(null)}
         foods={foods}
-        editingFood={editingFavorite}
+        editingFood={favoriteModal?.editing ?? null}
         onSaved={(food) => {
           const normalized = normalizeFood(food);
-          setFoods((prev) => {
-            const idx = prev.findIndex((f) => f.id === normalized.id);
-            if (idx >= 0) return prev.map((f) => (f.id === normalized.id ? normalized : f));
-            return [...prev, normalized];
-          });
-          setEditingFavorite(null);
+          setFoods((prev) =>
+            prev.some((f) => f.id === normalized.id) ? prev.map((f) => (f.id === normalized.id ? normalized : f)) : [...prev, normalized]
+          );
         }}
         onOpenNewFoodType={() => setSaveFoodOpen(true)}
       />
       <SaveFoodModal
         isOpen={saveFoodOpen}
         onClose={() => setSaveFoodOpen(false)}
-        onSaved={(food) => setFoods((prev) => [...prev, normalizeFood(food)])}
+        onSaved={(food) => setFoods((prev) => [...prev, normalizeFood(food)].sort((a, b) => a.name.localeCompare(b.name)))}
       />
     </div>
   );

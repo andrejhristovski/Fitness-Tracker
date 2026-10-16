@@ -7,9 +7,10 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  size?: "md" | "lg";
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, size = "md" }: ModalProps) {
   useEffect(() => {
     if (!isOpen) return;
     const handleEscape = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -25,7 +26,8 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      // Phones: bottom sheet. Larger screens: centered dialog.
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
@@ -35,8 +37,13 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+      <div
+        className={`relative flex max-h-[92dvh] w-full flex-col ${
+          size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md"
+        } rounded-t-3xl border border-b-0 border-[var(--border)] bg-[var(--card)] shadow-xl sm:max-h-[calc(100dvh-4rem)] sm:rounded-2xl sm:border-b`}
+      >
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-[var(--border)] sm:hidden" aria-hidden="true" />
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3 sm:py-4">
           <h2 id="modal-title" className="text-lg font-semibold">
             {title}
           </h2>
@@ -51,7 +58,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
             </svg>
           </button>
         </div>
-        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           {children}
         </div>
       </div>

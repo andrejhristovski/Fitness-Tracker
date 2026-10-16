@@ -1,60 +1,64 @@
-import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { FoodTab } from "@/components/food/food-tab";
 import { goalsFromSettings } from "@/lib/nutrition-goals";
+import { getUserToday } from "@/lib/user-date";
+import { addDays } from "@/lib/dates";
+import { normalizeFood } from "@/lib/normalize-food";
+import type { FoodEntry } from "@/types/database";
 
-function FoodTabFallback() {
-  return (
-    <div className="space-y-6">
-      <div className="h-10 w-48 animate-pulse rounded-lg bg-[var(--card)]" />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            className="h-20 animate-pulse rounded-xl bg-[var(--card)]"
-          />
-        ))}
-      </div>
-      <div className="h-64 animate-pulse rounded-xl bg-[var(--card)]" />
-    </div>
-  );
-}
-
-export default async function AppDashboardPage() {
+export default async function AppDashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const today = new Date().toISOString().slice(0, 10);
+  if (!user) return null;
 
-  const [entriesRes, foodsRes, settingsRes] = await Promise.all([
+  const today = await getUserToday();
+  const { date: requested } = await searchParams;
+  const logDate =
+    requested && /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today;
+
+  const [entriesRes, foodsRes, settingsRes, recentRes] = await Promise.all([
     supabase
       .from("food_entries")
       .select("*")
-      .eq("log_date", today)
-      .order("created_at", { ascending: false }),
-    supabase.from("foods").select("id, user_id, name, base_amount, base_unit, calories, protein, carbs, fats, is_quick_add, quick_add_amount, image_path, created_at").order("name"),
-    user
-      ? supabase.from("user_settings").select("*").eq("user_id", user.id).maybeSingle()
-      : Promise.resolve({ data: null }),
+      .eq("user_id", user.id)
+      .eq("log_date", logDate)
+      .order("created_at"),
+    supabase.from("foods").select("*").eq("user_id", user.id).order("name"),
+    supabase.from("user_settings").select("*").eq("user_id", user.id).maybeSingle(),
+    supabase
+      .from("food_entries")
+      .select("food_id, quantity")
+      .eq("user_id", user.id)
+      .gte("log_date", addDays(today, -30))
+      .not("food_id", "is", null)
+      .order("created_at"),
   ]);
 
-  const goals = goalsFromSettings(settingsRes.data ?? null);
-
-  const foods = (foodsRes.data ?? []).map((f) => ({
-    ...f,
-    is_quick_add: Boolean(f.is_quick_add),
-    quick_add_amount: f.quick_add_amount != null ? Number(f.quick_add_amount) : null,
-  }));
+  // Foods ordered by how often they were logged recently, with the usual amount for each.
+  const usage = new Map<string, { count: number; lastAmount: number }>();
+  for (const row of recentRes.data ?? []) {
+    const u = usage.get(row.food_id) ?? { count: 0, lastAmount: 0 };
+    usage.set(row.food_id, { count: u.count + 1, lastAmount: Number(row.quantity) || u.lastAmount });
+  }
+  const recent = [...usage.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([foodId, u]) => ({ foodId, amount: u.lastAmount }));
 
   return (
-    <Suspense fallback={<FoodTabFallback />}>
-      <FoodTab
-        initialEntries={entriesRes.data ?? []}
-        initialFoods={foods}
-        initialGoals={goals}
-        logDate={today}
-      />
-    </Suspense>
+    <FoodTab
+      key={logDate}
+      initialEntries={(entriesRes.data ?? []) as FoodEntry[]}
+      initialFoods={(foodsRes.data ?? []).map(normalizeFood)}
+      goals={goalsFromSettings(settingsRes.data ?? null)}
+      recent={recent}
+      logDate={logDate}
+      today={today}
+    />
   );
 }

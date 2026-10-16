@@ -1,248 +1,229 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import type {
-  WorkoutSession,
-  ExerciseEntry,
-  ExerciseDefinition,
-  WorkoutTemplate,
-} from "@/types/database";
+import type { ExerciseDefinition } from "@/types/database";
 
-export type SessionWithEntries = WorkoutSession & { exercise_entries: ExerciseEntry[] };
+/** All daily maxes are stored as exercise entries in one session per day with this name. */
+const DAILY_SESSION_NAME = "Daily log";
 
-export type TemplateWithExercises = WorkoutTemplate & {
-  workout_template_exercises: ({
-    id: string;
-    template_id: string;
-    exercise_definition_id: string;
-    sort_order: number;
-    exercise_definitions: ExerciseDefinition | null;
-  })[];
-};
+/** One point in an exercise's history: the heaviest weight logged on a date. */
+export type MaxLog = { date: string; kg: number };
 
-export type SessionExerciseInput = {
-  exercise_definition_id: string;
-  name: string;
-  weight_kg?: number | null;
-  sets?: number;
-  reps?: number | null;
-};
+/** A workout day in the user's split (stored as a workout template). */
+export type DayPlan = { id: string; name: string; exerciseIds: string[] };
 
-/** Create a session and add exercise entries with optional initial weight/sets/reps. */
-export async function createSessionWithExercises(
-  sessionDate: string,
-  sessionName: string | null,
-  exercises: SessionExerciseInput[]
-): Promise<{ ok: true; session: SessionWithEntries } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
+type ExerciseInput = { name: string; muscle_group: string | null };
+type Supabase = Awaited<ReturnType<typeof createClient>>;
 
-  const { data: session, error: sessionError } = await supabase
-    .from("workout_sessions")
-    .insert({
-      user_id: user.id,
-      session_date: sessionDate,
-      name: sessionName?.trim() || null,
-    })
-    .select()
-    .single();
+/** Save any exercises the user doesn't have yet; returns the new rows and the id for every item, in order. */
+async function ensureDefinitions(supabase: Supabase, userId: string, items: ExerciseInput[]) {
+  const { data: existing } = await supabase
+    .from("exercise_definitions")
+    .select("id, name")
+    .eq("user_id", userId);
+  const idByName = new Map((existing ?? []).map((d) => [d.name.toLowerCase(), d.id as string]));
 
-  if (sessionError || !session) return { ok: false, error: sessionError?.message ?? "Failed to create session" };
+  const cleaned = items
+    .map((i) => ({ name: i.name.trim(), muscle_group: i.muscle_group?.trim() || null }))
+    .filter((i) => i.name);
+  const missing = cleaned.filter(
+    (i, idx) =>
+      !idByName.has(i.name.toLowerCase()) &&
+      cleaned.findIndex((j) => j.name.toLowerCase() === i.name.toLowerCase()) === idx
+  );
 
-  if (exercises.length === 0) {
-    return { ok: true, session: { ...session, exercise_entries: [] } };
+  let created: ExerciseDefinition[] = [];
+  if (missing.length > 0) {
+    const { data, error } = await supabase
+      .from("exercise_definitions")
+      .insert(missing.map((i) => ({ ...i, user_id: userId })))
+      .select();
+    if (error) return { error: error.message };
+    created = (data ?? []) as ExerciseDefinition[];
+    for (const d of created) idByName.set(d.name.toLowerCase(), d.id);
   }
 
-  const entries: ExerciseEntry[] = [];
-  for (let i = 0; i < exercises.length; i++) {
-    const ex = exercises[i];
-    const { data: entry, error: entryError } = await supabase
-      .from("exercise_entries")
-      .insert({
-        session_id: session.id,
-        exercise_definition_id: ex.exercise_definition_id,
-        name: ex.name,
-        sets: ex.sets ?? 0,
-        reps: ex.reps ?? null,
-        weight_kg: ex.weight_kg ?? null,
-        sort_order: i,
-      })
-      .select()
-      .single();
-    if (!entryError && entry) entries.push(entry);
-  }
-
-  return { ok: true, session: { ...session, exercise_entries: entries } };
+  const ids = [...new Set(cleaned.map((i) => idByName.get(i.name.toLowerCase())!).filter(Boolean))];
+  return { created, ids };
 }
 
-/** Latest and max weight per exercise_definition_id for the current user. */
-export async function getExerciseDefinitionStats(): Promise<
-  Record<string, { latestWeight: number | null; maxWeight: number | null }>
+/** Append exercises to a day (skips ones already in it); returns the day's full ordered list. */
+async function appendToPlan(supabase: Supabase, planId: string, ids: string[]) {
+  const { data: rows } = await supabase
+    .from("workout_template_exercises")
+    .select("exercise_definition_id, sort_order")
+    .eq("template_id", planId)
+    .order("sort_order");
+  const current = (rows ?? []).map((r) => r.exercise_definition_id as string);
+  const toAdd = ids.filter((id) => !current.includes(id));
+  if (toAdd.length > 0) {
+    const start = (rows ?? []).reduce((m, r) => Math.max(m, r.sort_order + 1), 0);
+    const { error } = await supabase.from("workout_template_exercises").insert(
+      toAdd.map((id, i) => ({ template_id: planId, exercise_definition_id: id, sort_order: start + i }))
+    );
+    if (error) return { error: error.message };
+  }
+  return { exerciseIds: [...current, ...toAdd] };
+}
+
+/** Add exercises to the user's list (skips names already saved), optionally also to a day. */
+export async function addExercises(
+  items: ExerciseInput[],
+  planId: string | null
+): Promise<
+  { ok: true; created: ExerciseDefinition[]; planExerciseIds: string[] | null } | { ok: false; error: string }
 > {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return {};
+  if (!user) return { ok: false, error: "Not signed in" };
 
-  const { data: sessions } = await supabase
+  const ensured = await ensureDefinitions(supabase, user.id, items);
+  if ("error" in ensured) return { ok: false, error: ensured.error! };
+  if (!planId) return { ok: true, created: ensured.created, planExerciseIds: null };
+
+  const appended = await appendToPlan(supabase, planId, ensured.ids);
+  if ("error" in appended) return { ok: false, error: appended.error! };
+  return { ok: true, created: ensured.created, planExerciseIds: appended.exerciseIds };
+}
+
+/**
+ * Create one or more workout days, saving any of their exercises the user doesn't have yet.
+ * Done in a single action so the client never has to chain server-action calls.
+ */
+export async function createDayPlans(
+  days: { name: string; items: ExerciseInput[] }[]
+): Promise<{ ok: true; plans: DayPlan[]; created: ExerciseDefinition[] } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const plans: DayPlan[] = [];
+  const created: ExerciseDefinition[] = [];
+  for (const day of days) {
+    const ensured = await ensureDefinitions(supabase, user.id, day.items);
+    if ("error" in ensured) return { ok: false, error: ensured.error! };
+    created.push(...ensured.created);
+
+    const { data: template, error } = await supabase
+      .from("workout_templates")
+      .insert({ user_id: user.id, name: day.name.trim() })
+      .select("id, name")
+      .single();
+    if (error || !template) return { ok: false, error: error?.message ?? "Failed to create day" };
+
+    const appended = await appendToPlan(supabase, template.id, ensured.ids);
+    if ("error" in appended) return { ok: false, error: appended.error! };
+    plans.push({ id: template.id, name: template.name, exerciseIds: appended.exerciseIds });
+  }
+  return { ok: true, plans, created };
+}
+
+/** Rename a day and replace its exercise list (in the given order). */
+export async function updateDayPlan(
+  id: string,
+  name: string,
+  exerciseIds: string[]
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("workout_templates").update({ name: name.trim() }).eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  const { error: delError } = await supabase.from("workout_template_exercises").delete().eq("template_id", id);
+  if (delError) return { ok: false, error: delError.message };
+  if (exerciseIds.length > 0) {
+    const { error: insError } = await supabase.from("workout_template_exercises").insert(
+      exerciseIds.map((exId, i) => ({ template_id: id, exercise_definition_id: exId, sort_order: i }))
+    );
+    if (insError) return { ok: false, error: insError.message };
+  }
+  return { ok: true };
+}
+
+/** Delete a workout day. Its exercises and their history stay. */
+export async function deleteDayPlan(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("workout_templates").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** Remove an exercise from the user's list. Past entries keep their name but lose the link. */
+export async function deleteExerciseDefinition(
+  id: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { error } = await supabase.from("exercise_definitions").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * Set (or clear, with kg = null) the max weight for an exercise on a date.
+ * Stored in that day's "Daily log" session so the stats tab still counts the workout.
+ */
+export async function logDailyMax(
+  definition: { id: string; name: string },
+  date: string,
+  kg: number | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: found } = await supabase
     .from("workout_sessions")
     .select("id")
-    .eq("user_id", user.id);
-  const sessionIds = (sessions ?? []).map((s) => s.id);
-  if (sessionIds.length === 0) return {};
-
-  const { data: rows } = await supabase
-    .from("exercise_entries")
-    .select("session_id, exercise_definition_id, weight_kg, created_at")
-    .not("exercise_definition_id", "is", null)
-    .in("session_id", sessionIds);
-
-  const filtered = rows ?? [];
-  const byDef: Record<string, { weight_kg: number | null; created_at: string }[]> = {};
-  for (const r of filtered) {
-    const id = r.exercise_definition_id as string;
-    if (!byDef[id]) byDef[id] = [];
-    byDef[id].push({ weight_kg: r.weight_kg, created_at: r.created_at });
-  }
-
-  const result: Record<string, { latestWeight: number | null; maxWeight: number | null }> = {};
-  for (const [id, arr] of Object.entries(byDef)) {
-    const withDate = arr.filter((a) => a.weight_kg != null) as { weight_kg: number; created_at: string }[];
-    const sorted = [...withDate].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-    const latestWeight = sorted[0]?.weight_kg ?? null;
-    const maxWeight = withDate.length ? Math.max(...withDate.map((a) => a.weight_kg)) : null;
-    result[id] = { latestWeight, maxWeight };
-  }
-  return result;
-}
-
-/** Create a new exercise definition. */
-export async function createExerciseDefinition(
-  name: string,
-  muscleGroup: string | null
-): Promise<{ ok: true; data: ExerciseDefinition } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
-
-  const { data, error } = await supabase
-    .from("exercise_definitions")
-    .insert({
-      user_id: user.id,
-      name: name.trim(),
-      muscle_group: muscleGroup?.trim() || null,
-    })
-    .select()
-    .single();
-
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "Failed to create" };
-  return { ok: true, data: data as ExerciseDefinition };
-}
-
-/** Update a single exercise entry (sets, reps, weight_kg, notes). */
-export async function updateExerciseEntry(
-  entryId: string,
-  updates: { sets?: number; reps?: number | null; weight_kg?: number | null; notes?: string | null }
-): Promise<{ ok: true; data: ExerciseEntry } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("exercise_entries")
-    .update(updates)
-    .eq("id", entryId)
-    .select()
-    .single();
-
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "Not found" };
-  return { ok: true, data: data as ExerciseEntry };
-}
-
-/** Create a workout template with the given name and exercise definition IDs. */
-export async function createWorkoutTemplate(
-  name: string,
-  exerciseDefinitionIds: string[]
-): Promise<{ ok: true; template: TemplateWithExercises } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
-
-  const { data: template, error: templateError } = await supabase
-    .from("workout_templates")
-    .insert({ user_id: user.id, name: name.trim() })
-    .select()
-    .single();
-
-  if (templateError || !template) return { ok: false, error: templateError?.message ?? "Failed to create template" };
-
-  const templateExercises: TemplateWithExercises["workout_template_exercises"] = [];
-  for (let i = 0; i < exerciseDefinitionIds.length; i++) {
-    const defId = exerciseDefinitionIds[i];
-    const { data: def } = await supabase
-      .from("exercise_definitions")
-      .select()
-      .eq("id", defId)
-      .single();
-    const { data: te, error: teError } = await supabase
-      .from("workout_template_exercises")
-      .insert({
-        template_id: template.id,
-        exercise_definition_id: defId,
-        sort_order: i,
-      })
-      .select()
-      .single();
-    if (!teError && te)
-      templateExercises.push({
-        ...te,
-        exercise_definitions: def as ExerciseDefinition | null,
-      });
-  }
-  return {
-    ok: true,
-    template: { ...template, workout_template_exercises: templateExercises } as TemplateWithExercises,
-  };
-}
-
-/** Add one exercise entry to a session (by definition id or free name). */
-export async function addExerciseToSession(
-  sessionId: string,
-  exerciseDefinitionId: string | null,
-  name: string
-): Promise<{ ok: true; data: ExerciseEntry } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const { data: existing } = await supabase
-    .from("exercise_entries")
-    .select("sort_order")
-    .eq("session_id", sessionId)
-    .order("sort_order", { ascending: false })
+    .eq("user_id", user.id)
+    .eq("session_date", date)
+    .eq("name", DAILY_SESSION_NAME)
     .limit(1)
     .maybeSingle();
 
-  const sortOrder = (existing?.sort_order ?? -1) + 1;
-  const { data, error } = await supabase
-    .from("exercise_entries")
-    .insert({
-      session_id: sessionId,
-      exercise_definition_id: exerciseDefinitionId,
-      name: name.trim() || "Exercise",
-      sets: 0,
-      sort_order: sortOrder,
-    })
-    .select()
-    .single();
+  let sessionId = found?.id as string | undefined;
+  if (!sessionId) {
+    if (kg == null) return { ok: true };
+    const { data: created, error } = await supabase
+      .from("workout_sessions")
+      .insert({ user_id: user.id, session_date: date, name: DAILY_SESSION_NAME })
+      .select("id")
+      .single();
+    if (error || !created) return { ok: false, error: error?.message ?? "Failed to create session" };
+    sessionId = created.id as string;
+  }
 
+  const { data: entry } = await supabase
+    .from("exercise_entries")
+    .select("id")
+    .eq("session_id", sessionId)
+    .eq("exercise_definition_id", definition.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (kg == null) {
+    if (entry) await supabase.from("exercise_entries").delete().eq("id", entry.id);
+    const { count } = await supabase
+      .from("exercise_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("session_id", sessionId);
+    if (!count) await supabase.from("workout_sessions").delete().eq("id", sessionId);
+    return { ok: true };
+  }
+
+  const { error } = entry
+    ? await supabase.from("exercise_entries").update({ weight_kg: kg }).eq("id", entry.id)
+    : await supabase.from("exercise_entries").insert({
+        session_id: sessionId,
+        exercise_definition_id: definition.id,
+        name: definition.name,
+        sets: 1,
+        weight_kg: kg,
+      });
   if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "Failed to add" };
-  return { ok: true, data: data as ExerciseEntry };
+  return { ok: true };
 }
