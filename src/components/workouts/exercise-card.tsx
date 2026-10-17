@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ExerciseDefinition } from "@/types/database";
 import type { MaxLog } from "@/app/actions/workout-actions";
 import { iconForExercise } from "@/lib/exercise-library";
+import { daysBetween } from "@/lib/dates";
 import { ExerciseIcon } from "./exercise-icon";
 
 interface ExerciseCardProps {
@@ -61,6 +62,16 @@ export function ExerciseCard({ definition, history, today, onSave, onOpen }: Exe
     setStatus(ok ? "idle" : "error");
   }
 
+  async function quickSave(kg: number) {
+    setValue(String(kg));
+    setStatus("saving");
+    const ok = await onSave(kg);
+    setStatus(ok ? "idle" : "error");
+  }
+
+  const ago = previous ? daysBetween(previous.date, today) : null;
+  const agoLabel = ago == null ? "" : ago === 1 ? "yesterday" : `${ago} days ago`;
+
   const delta = todayLog && previous ? todayLog.kg - previous.kg : null;
   const earlier = history.filter((h) => h.date !== today).map((h) => h.kg);
   const isPR = todayLog != null && earlier.length > 0 && todayLog.kg > Math.max(...earlier);
@@ -84,6 +95,33 @@ export function ExerciseCard({ definition, history, today, onSave, onOpen }: Exe
         <Sparkline values={history.slice(-12).map((h) => h.kg)} />
       </div>
 
+      {previous && (
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-xs text-[var(--muted)]">
+            Last time <span className="font-semibold text-[var(--foreground)]">{formatKg(previous.kg)}</span> · {agoLabel}
+          </p>
+          {!todayLog && (
+            <div className="flex shrink-0 gap-1.5">
+              <button
+                type="button"
+                onClick={() => quickSave(previous.kg)}
+                className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs font-medium transition-colors hover:bg-[var(--card-hover)]"
+              >
+                Same
+              </button>
+              <button
+                type="button"
+                onClick={() => quickSave(previous.kg + 2.5)}
+                className="rounded-lg border border-[var(--accent)]/50 bg-[var(--accent)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20"
+                aria-label={`Log ${previous.kg + 2.5} kg`}
+              >
+                +2.5
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <form
         className="mt-3 flex items-center gap-2"
         onSubmit={(e) => {
@@ -99,7 +137,7 @@ export function ExerciseCard({ definition, history, today, onSave, onOpen }: Exe
           <input
             type="text"
             inputMode="decimal"
-            placeholder={previous ? `Last ${previous.kg}` : "Today's max"}
+            placeholder="Today's max"
             value={value}
             onChange={(e) => {
               setValue(e.target.value);

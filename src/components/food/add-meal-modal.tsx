@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { lookupBarcode } from "@/lib/open-food-facts";
+import { BarcodeScanner } from "./barcode-scanner";
 import type { Food } from "@/types/database";
 import type { LibraryFood } from "@/lib/food-library";
 import { Modal } from "@/components/ui/modal";
@@ -14,6 +16,7 @@ import {
   chipClass,
   defaultAmountFor,
   fromFood,
+  fromLibrary,
   inputClass,
   perLabel,
   presetsFor,
@@ -80,12 +83,34 @@ function AddMealForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [scanning, setScanning] = useState(false);
+  const [lookup, setLookup] = useState<{ state: "loading" } | { state: "notFound"; code: string } | null>(null);
+
   const recentAmount = useMemo(() => new Map(recent.map((r) => [r.foodId, r.amount])), [recent]);
 
   function pick(item: Pickable) {
     setSelected(item);
     setAmount(String(defaultAmountFor(item, item.food && recentAmount.get(item.food.id))));
   }
+
+  const handleBarcode = useCallback(
+    async (code: string) => {
+      setScanning(false);
+      setLookup({ state: "loading" });
+      const product = await lookupBarcode(code).catch(() => null);
+      if (!product) {
+        setLookup({ state: "notFound", code });
+        return;
+      }
+      setLookup(null);
+      // Scanned this product before? Use the saved food so history and favorites line up.
+      const existing = foods.find((f) => f.name.toLowerCase() === product.name.toLowerCase());
+      const item = existing ? fromFood(existing) : { ...fromLibrary(product), key: `off:${product.barcode}` };
+      setSelected(item);
+      setAmount(String(product.presets?.[0] ?? 100));
+    },
+    [foods]
+  );
 
   const amountNum = Number(amount.replace(",", ".")) || 0;
   const nutrition = selected && amountNum > 0 ? calculateNutrition(selected, amountNum) : null;
@@ -133,6 +158,7 @@ function AddMealForm({
   const isMeal = selected?.base_unit === "serving";
 
   return (
+    <>
     <form
       className="space-y-4"
       onSubmit={(e) => {
@@ -221,7 +247,29 @@ function AddMealForm({
           </div>
         ) : (
           <div className="space-y-3">
-            <FoodSearchList foods={foods} recent={recent} onPick={pick} />
+            <button
+              type="button"
+              onClick={() => {
+                setLookup(null);
+                setScanning(true);
+              }}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/10 py-3 font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/15"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M13 8v8M17 8v8" />
+              </svg>
+              Scan barcode
+            </button>
+            {lookup?.state === "loading" && <p className="text-center text-sm text-[var(--muted)]">Looking up product…</p>}
+            {lookup?.state === "notFound" && (
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 text-sm">
+                <p>
+                  Barcode <span className="font-mono">{lookup.code}</span> isn&apos;t in Open Food Facts (or has no calorie data).
+                </p>
+                <p className="mt-1 text-[var(--muted)]">Use Quick entry, or create a custom food type from the label.</p>
+              </div>
+            )}
+            <FoodSearchList foods={foods} recent={recent} onPick={pick} autoFocus={false} />
             <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--border)] pt-3">
               <button type="button" onClick={onCreateMeal} className="text-sm font-medium text-[var(--accent)] hover:underline">
                 + Create a meal (e.g. oats + whey)
@@ -278,5 +326,8 @@ function AddMealForm({
         </button>
       )}
     </form>
+    {/* Outside the form: the scanner has its own form for typed barcodes. */}
+    {scanning && <BarcodeScanner onDetected={handleBarcode} onClose={() => setScanning(false)} />}
+    </>
   );
 }
