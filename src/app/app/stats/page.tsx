@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, sum } from "drizzle-orm";
+import { and, asc, count, eq, gte, sum } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { requireUser } from "@/lib/session";
 import { fetchExerciseHistory } from "@/lib/exercise-history";
@@ -7,14 +7,15 @@ import { getUserToday } from "@/lib/user-date";
 import { addDays } from "@/lib/dates";
 import { StatsTab } from "@/components/stats/stats-tab";
 
-const { foodEntries, bodyLogs, userSettings, workoutSessions, exerciseEntries, exerciseDefinitions } = schema;
+const { foodEntries, bodyLogs, userSettings, workoutSessions, exerciseEntries, exerciseDefinitions, workoutTemplates } =
+  schema;
 
 export default async function StatsPage() {
   const user = await requireUser();
   // Enough history for the 90-day view plus the period before it.
   const since = addDays(await getUserToday(), -200);
 
-  const [dailyFood, logs, [settings], trained, definitions, history] = await Promise.all([
+  const [dailyFood, logs, [settings], trained, definitions, history, [days]] = await Promise.all([
     db
       .select({
         date: foodEntries.log_date,
@@ -36,6 +37,7 @@ export default async function StatsPage() {
       .where(and(eq(workoutSessions.user_id, user.id), gte(workoutSessions.session_date, since))),
     db.select().from(exerciseDefinitions).where(eq(exerciseDefinitions.user_id, user.id)),
     fetchExerciseHistory(user.id),
+    db.select({ n: count() }).from(workoutTemplates).where(eq(workoutTemplates.user_id, user.id)),
   ]);
 
   const nutrition = Object.fromEntries(
@@ -51,6 +53,8 @@ export default async function StatsPage() {
       trainedDays={trained.map((t) => t.date)}
       definitions={definitions}
       history={history}
+      // Target = number of workout days in the split (same as Home), 3 without a split.
+      weeklyTarget={days?.n || 3}
     />
   );
 }

@@ -261,59 +261,6 @@ export function ColumnChart({ bars, color = "var(--accent)", goal, goalLabel, he
   );
 }
 
-/** GitHub-style calendar: one column per week, one cell per day; filled = trained. */
-export function TrainingCalendar({ days, trained }: { days: string[]; trained: Set<string> }) {
-  const [hover, setHover] = useState<string | null>(null);
-  // Pad the start so the first column begins on Monday.
-  const firstDow = (parseDate(days[0]).getDay() + 6) % 7;
-  const cells: (string | null)[] = [...Array(firstDow).fill(null), ...days];
-  const weeks: (string | null)[][] = [];
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
-
-  return (
-    <div className="relative">
-      <div className="flex gap-[3px] overflow-x-auto pb-1">
-        <div className="mr-1 flex flex-col justify-between py-[1px] text-[10px] leading-none text-[var(--muted)]">
-          <span>Mon</span>
-          <span>Thu</span>
-          <span>Sun</span>
-        </div>
-        {weeks.map((week, wi) => (
-          <div key={wi} className="flex flex-col gap-[3px]">
-            {Array.from({ length: 7 }, (_, di) => {
-              const day = week[di];
-              if (!day) return <div key={di} className="h-3.5 w-3.5" />;
-              const on = trained.has(day);
-              return (
-                <div
-                  key={di}
-                  onPointerEnter={() => setHover(day)}
-                  onPointerLeave={() => setHover(null)}
-                  className="h-3.5 w-3.5 rounded-[3px]"
-                  style={{ background: on ? "var(--accent)" : "var(--card-hover)" }}
-                  aria-label={`${formatShortDate(day)}: ${on ? "trained" : "rest"}`}
-                />
-              );
-            })}
-          </div>
-        ))}
-      </div>
-      <p className="mt-2 h-4 text-xs text-[var(--muted)]">
-        {hover ? (
-          <>
-            {formatShortDate(hover)} · <span className="text-[var(--foreground)]">{trained.has(hover) ? "Trained" : "Rest day"}</span>
-          </>
-        ) : (
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-[2px] bg-[var(--card-hover)]" /> Rest
-            <span className="ml-2 inline-block h-2.5 w-2.5 rounded-[2px] bg-[var(--accent)]" /> Trained
-          </span>
-        )}
-      </p>
-    </div>
-  );
-}
-
 export function StatTile({
   label,
   value,

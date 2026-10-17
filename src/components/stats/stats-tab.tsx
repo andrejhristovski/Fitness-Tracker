@@ -9,7 +9,7 @@ import { MUSCLE_GROUPS, iconForExercise } from "@/lib/exercise-library";
 import { MACRO_COLORS } from "@/lib/macro-colors";
 import { ExerciseIcon } from "@/components/workouts/exercise-icon";
 import { AddBodyLogForm } from "./add-body-log-form";
-import { ColumnChart, LineChart, Meter, StatTile, TrainingCalendar, formatNumber } from "./charts";
+import { ColumnChart, LineChart, Meter, StatTile, formatNumber } from "./charts";
 
 type DayNutrition = { calories: number; protein: number; carbs: number; fats: number };
 
@@ -21,6 +21,8 @@ interface StatsTabProps {
   trainedDays: string[];
   definitions: ExerciseDefinition[];
   history: Record<string, MaxLog[]>;
+  /** Workouts per week to aim for. */
+  weeklyTarget: number;
 }
 
 const RANGES = [
@@ -57,7 +59,16 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWeightKg, trainedDays, definitions, history }: StatsTabProps) {
+export function StatsTab({
+  nutrition,
+  goals,
+  bodyLogs: initialBodyLogs,
+  targetWeightKg,
+  trainedDays,
+  definitions,
+  history,
+  weeklyTarget,
+}: StatsTabProps) {
   const [today] = useState(localDate);
   const [range, setRange] = useState<number>(30);
   const [bodyLogs, setBodyLogs] = useState(initialBodyLogs);
@@ -99,8 +110,24 @@ export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWe
 
   // ---- Training ----
   const trainedInRange = days.filter((d) => trained.has(d)).length;
-  const calendarDays = lastDays(today, 7 * 13);
   const weekStart = addDays(today, -((new Date().getDay() + 6) % 7));
+
+  // ---- Workouts per week: last 12 weeks (Mon–Sun), oldest first ----
+  const weeks = Array.from({ length: 12 }, (_, i) => {
+    const start = addDays(weekStart, -7 * (11 - i));
+    const n = lastDays(addDays(start, 6), 7).filter((d) => d <= today && trained.has(d)).length;
+    return { start, n };
+  });
+  const weekBars = weeks.map((w, i) => ({
+    key: w.start,
+    label: i === weeks.length - 1 ? "This wk" : formatShortDate(w.start),
+    value: w.n,
+    tooltip: `${i === weeks.length - 1 ? "This week" : `Week of ${formatShortDate(w.start)}`} · ${w.n} workout${w.n === 1 ? "" : "s"}`,
+  }));
+  const avgPerWeek = weeks.reduce((s, w) => s + w.n, 0) / weeks.length;
+  // Consecutive weeks hitting the target, counting back from last week (plus this week once it's hit).
+  let weekStreak = weeks.at(-1)!.n >= weeklyTarget ? 1 : 0;
+  for (let i = weeks.length - 2; i >= 0 && weeks[i].n >= weeklyTarget; i--) weekStreak++;
 
   // ---- Muscle groups: exercises logged per muscle, this week (Mon–today) vs last week ----
   const lastWeekStart = addDays(weekStart, -7);
@@ -378,17 +405,21 @@ export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWe
         )}
       </Card>
 
-      {/* Consistency */}
-      <Card
-        title="Training consistency"
-        subtitle={`Last 13 weeks · ${calendarDays.filter((d) => trained.has(d)).length} workouts · ${(calendarDays.filter((d) => trained.has(d)).length / 13).toFixed(1)} per week`}
-        action={
-          <span className="rounded-lg bg-[var(--background)] px-2.5 py-1 text-xs">
-            This week: <span className="font-semibold">{thisWeek}</span>
-          </span>
-        }
-      >
-        <TrainingCalendar days={calendarDays} trained={trained} />
+      {/* Workouts per week */}
+      <Card title="Workouts per week" subtitle={`Last 12 weeks · target ${weeklyTarget} per week`}>
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          {[
+            { label: "This week", value: `${thisWeek}/${weeklyTarget}`, hit: thisWeek >= weeklyTarget },
+            { label: "Average", value: `${avgPerWeek.toFixed(1)}/wk`, hit: false },
+            { label: "Streak", value: `${weekStreak} ${weekStreak === 1 ? "wk" : "wks"}`, hit: weekStreak > 0 },
+          ].map((s) => (
+            <div key={s.label} className="rounded-xl bg-[var(--background)] px-3 py-2.5">
+              <p className="text-xs text-[var(--muted)]">{s.label}</p>
+              <p className={`mt-0.5 text-lg font-semibold tabular-nums ${s.hit ? "text-[var(--accent)]" : ""}`}>{s.value}</p>
+            </div>
+          ))}
+        </div>
+        <ColumnChart bars={weekBars} goal={weeklyTarget} goalLabel={`Target ${weeklyTarget}/week`} height={180} />
       </Card>
 
       {/* Body weight */}
