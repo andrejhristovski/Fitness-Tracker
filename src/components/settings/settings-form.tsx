@@ -192,7 +192,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
         <button
           type="submit"
           disabled={saving || !dirty}
-          className="w-full rounded-xl bg-[var(--accent)] py-3 font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
+          className="w-full rounded-xl bg-[var(--accent)] py-3 font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
         >
           {saving ? "Saving…" : dirty ? "Save changes" : "All changes saved"}
         </button>

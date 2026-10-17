@@ -35,7 +35,7 @@ export const viewport: Viewport = {
   // Stops iOS from zooming into inputs on focus; pinch-zoom still works.
   maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#0c0c0f",
+  themeColor: "#0f1115",
   colorScheme: "dark",
 };
 

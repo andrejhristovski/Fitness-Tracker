@@ -165,7 +165,7 @@ export function ExerciseLibraryModal({ isOpen, onClose, disabledNames, title = "
                 }))
               )
             }
-            className="w-full rounded-xl bg-[var(--accent)] py-3 font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
+            className="w-full rounded-xl bg-[var(--accent)] py-3 font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
           >
             {saving ? "Adding…" : selected.size ? `Add ${selected.size} exercise${selected.size > 1 ? "s" : ""}` : "Select exercises"}
           </button>

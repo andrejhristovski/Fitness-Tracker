@@ -1,14 +1,20 @@
 @import "tailwindcss";
 
+/* "Midnight Lime" theme */
 :root {
-  --background: #0c0c0f;
-  --foreground: #fafafa;
-  --card: #16161a;
-  --card-hover: #1c1c22;
-  --border: #2a2a32;
-  --muted: #71717a;
-  --accent: #22c55e;
-  --accent-hover: #16a34a;
+  --background: #0f1115;
+  --foreground: #f5f7fa;
+  --card: #191c22;
+  --card-hover: #21252d;
+  --border: #2a2f38;
+  --muted: #8b909a;
+  --accent: #b7f34a; /* lime */
+  --accent-hover: #a5e23a;
+  --on-accent: #0f1115; /* text on lime: dark, white is unreadable */
+  --accent-2: #6ee7b7; /* mint, second stop of gradients */
+  /* "Purple Energy" highlight, used for the weekly goal */
+  --purple: #9b7bff;
+  --pink: #e76fff;
 }
 
 @theme inline {

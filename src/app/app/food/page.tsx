@@ -8,7 +8,7 @@ import { addDays } from "@/lib/dates";
 
 const { foodEntries, foods, userSettings } = schema;
 
-export default async function AppDashboardPage({
+export default async function FoodPage({
   searchParams,
 }: {
   searchParams: Promise<{ date?: string }>;

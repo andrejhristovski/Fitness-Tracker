@@ -1,6 +1,6 @@
-import type { Food } from "@/types/database";
+import type { Food, Ingredient } from "@/types/database";
 
-/** Normalize a row from Supabase (or any partial) into a Food shape so it always has is_quick_add and quick_add_amount. */
+/** Normalize a database row (or any partial) into a complete Food shape. */
 export function normalizeFood(row: Record<string, unknown> | Food): Food {
   return {
     id: String(row.id),
@@ -16,6 +16,7 @@ export function normalizeFood(row: Record<string, unknown> | Food): Food {
     quick_add_amount:
       row.quick_add_amount != null ? Number(row.quick_add_amount) : null,
     image_path: row.image_path != null ? String(row.image_path) : null,
+    ingredients: Array.isArray(row.ingredients) ? (row.ingredients as Ingredient[]) : null,
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
 }

@@ -178,7 +178,7 @@ export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWe
               aria-selected={range === r.days}
               onClick={() => setRange(r.days)}
               className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                range === r.days ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                range === r.days ? "bg-[var(--accent)] text-[var(--on-accent)]" : "text-[var(--muted)] hover:text-[var(--foreground)]"
               }`}
             >
               {r.label}

@@ -215,7 +215,7 @@ export const FOOD_ICONS: Record<FoodIconKey, IconDef> = {
   },
   shaker: {
     label: "Protein shake",
-    color: "#22c55e",
+    color: "#b7f34a",
     svg: (
       <>
         <path d="M7 8h10l-1.2 12.2a1 1 0 0 1-1 .8H9.2a1 1 0 0 1-1-.8Z" />

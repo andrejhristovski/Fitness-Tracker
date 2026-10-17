@@ -98,7 +98,7 @@ export function AuthSubmit({ loading, children, loadingText }: { loading: boolea
     <button
       type="submit"
       disabled={loading}
-      className="w-full rounded-xl bg-[var(--accent)] py-3.5 text-base font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
+      className="w-full rounded-xl bg-[var(--accent)] py-3.5 text-base font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
     >
       {loading ? loadingText : children}
     </button>

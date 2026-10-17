@@ -34,6 +34,28 @@ export async function createFood(row: NewFood) {
   });
 }
 
+/** Update a saved meal: name, per-portion totals, icon and ingredients. */
+export async function updateMeal(
+  foodId: string,
+  meal: Pick<Food, "name" | "calories" | "protein" | "carbs" | "fats" | "image_path" | "ingredients">
+) {
+  return withUser(async (userId) => {
+    const name = meal.name.trim();
+    const [clash] = await db
+      .select({ id: foods.id })
+      .from(foods)
+      .where(and(eq(foods.user_id, userId), sql`lower(${foods.name}) = lower(${name})`, sql`${foods.id} <> ${foodId}`));
+    if (clash) return { ok: false as const, error: `You already have a food called "${name}".` };
+    const [data] = await db
+      .update(foods)
+      .set({ ...meal, name })
+      .where(and(eq(foods.id, foodId), eq(foods.user_id, userId)))
+      .returning();
+    if (!data) return { ok: false as const, error: "Meal not found" };
+    return { ok: true as const, data: data as Food };
+  });
+}
+
 /** Mark a food as a Quick add favorite with a default amount. */
 export async function saveFavoriteFromTemplate(foodId: string, quickAddAmount: number, imagePath: string | null = null) {
   return withUser(async (userId) => {

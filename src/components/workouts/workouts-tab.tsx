@@ -13,6 +13,7 @@ import {
   type MaxLog,
 } from "@/app/actions/workout-actions";
 import { localDate } from "@/lib/dates";
+import { lastTrained, suggestDay } from "@/lib/workout-plan";
 import { EXERCISE_LIBRARY, MUSCLE_GROUPS, PRESET_DAYS, findLibraryExercise } from "@/lib/exercise-library";
 import { ExerciseCard } from "./exercise-card";
 import { ExerciseLibraryModal } from "./exercise-library-modal";
@@ -30,29 +31,6 @@ const ALL = "all";
 function withLog(history: MaxLog[], date: string, kg: number | null): MaxLog[] {
   const rest = history.filter((h) => h.date !== date);
   return kg == null ? rest : [...rest, { date, kg }].sort((a, b) => a.date.localeCompare(b.date));
-}
-
-/** Most recent date any exercise in the day was logged. */
-function lastTrained(plan: DayPlan, history: Record<string, MaxLog[]>): string | null {
-  let last: string | null = null;
-  for (const id of plan.exerciseIds) {
-    const d = history[id]?.at(-1)?.date;
-    if (d && (!last || d > last)) last = d;
-  }
-  return last;
-}
-
-/** Today's day if already started, otherwise the one after the most recently trained (rotation). */
-function suggestDay(plans: DayPlan[], history: Record<string, MaxLog[]>, today: string): string | null {
-  if (plans.length === 0) return null;
-  const last = plans.map((p) => lastTrained(p, history));
-  const todayIdx = last.indexOf(today);
-  if (todayIdx >= 0) return plans[todayIdx].id;
-  let recent = -1;
-  last.forEach((d, i) => {
-    if (d && (recent < 0 || d > last[recent]!)) recent = i;
-  });
-  return plans[(recent + 1) % plans.length].id;
 }
 
 function daysAgo(date: string, today: string) {
@@ -244,7 +222,7 @@ export function WorkoutsTab({ initialDefinitions, initialHistory, initialPlans }
               type="button"
               disabled={busy}
               onClick={() => createPresets(PRESET_DAYS)}
-              className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
+              className="rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-50"
             >
               {busy ? "Creating…" : "Create all 3 days"}
             </button>
@@ -347,7 +325,7 @@ export function WorkoutsTab({ initialDefinitions, initialHistory, initialPlans }
             <button
               type="button"
               onClick={() => setLibraryOpen(true)}
-              className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--accent-hover)]"
+              className="flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)]"
             >
               <span className="text-base leading-none">+</span> Add exercise
             </button>

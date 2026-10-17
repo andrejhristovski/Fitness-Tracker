@@ -21,10 +21,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ size
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#0c0c0f",
+          background: "#0f1115",
         }}
       >
-        <svg width={glyph} height={glyph} viewBox="0 0 64 64" fill="none" stroke="#22c55e" strokeWidth={5} strokeLinecap="round">
+        <svg width={glyph} height={glyph} viewBox="0 0 64 64" fill="none" stroke="#b7f34a" strokeWidth={5} strokeLinecap="round">
           <path d="M20 32h24M12 23v18M19 18v28M45 18v28M52 23v18" />
         </svg>
       </div>

@@ -123,7 +123,7 @@ export function BarcodeScanner({ onDetected, onClose }: BarcodeScannerProps) {
         <button
           type="submit"
           disabled={typed.replace(/\D/g, "").length < 6}
-          className="rounded-xl bg-[var(--accent)] px-4 font-semibold text-white disabled:opacity-40"
+          className="rounded-xl bg-[var(--accent)] px-4 font-semibold text-[var(--on-accent)] disabled:opacity-40"
         >
           Look up
         </button>

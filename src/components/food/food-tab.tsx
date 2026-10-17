@@ -15,17 +15,19 @@ import {
   removeFavorite,
   saveFavoriteFromTemplate,
   updateFoodEntry,
+  updateMeal,
   type NewFood,
 } from "@/app/actions/food-actions";
 import { DaySummary } from "./day-summary";
 import { FoodThumb } from "./food-thumb";
 import { AddMealModal, type NewEntry } from "./add-meal-modal";
 import { EditEntryModal, type EntryUpdate } from "./edit-entry-modal";
-import { FavoriteModal } from "./favorite-modal";
+import { FavoriteModal, type FavoriteTab } from "./favorite-modal";
 import { SaveFoodModal } from "./save-food-modal";
-import { CreateMealModal, type MealDraft } from "./create-meal-modal";
+import type { MealDraft } from "./meal-builder";
 import type { LibraryFood } from "@/lib/food-library";
 import { DragGhost, useMealDrag } from "./use-meal-drag";
+import { MealChoiceModal } from "./meal-choice-modal";
 
 type DragItem = { kind: "favorite"; food: Food } | { kind: "entry"; entry: FoodEntry };
 
@@ -55,12 +57,12 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   const [prefill, setPrefill] = useState<{ food: Food; amount: number } | null>(null);
   const [defaultMeal, setDefaultMeal] = useState<MealType>(() => mealForNow());
   const [editing, setEditing] = useState<FoodEntry | null>(null);
-  const [favoriteModal, setFavoriteModal] = useState<{ editing: Food | null } | null>(null);
+  const [favoriteModal, setFavoriteModal] = useState<{ editing: Food | null; tab?: FavoriteTab } | null>(null);
   const [saveFoodOpen, setSaveFoodOpen] = useState(false);
   const [manage, setManage] = useState(false);
   /** Meal that Quick add's + button logs into; starts at the meal for the current time. */
-  const [targetMeal, setTargetMeal] = useState<MealType>(() => mealForNow());
-  const [createMealOpen, setCreateMealOpen] = useState(false);
+  /** Favorite whose + was tapped: ask which meal to log it to. */
+  const [choosingMealFor, setChoosingMealFor] = useState<Food | null>(null);
   const [toast, setToast] = useState<{ text: string; onUndo?: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,6 +143,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
       image_path: lib.image_path,
       is_quick_add: false,
       quick_add_amount: null,
+      ingredients: null,
     });
     if ("error" in result) {
       setError(result.error);
@@ -149,7 +152,15 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return result.food;
   }
 
-  async function saveMeal(meal: MealDraft) {
+  /** Create a meal (saved straight to Quick add), or update an existing one. */
+  async function saveMeal(meal: MealDraft, mealId?: string) {
+    if (mealId) {
+      const result = await updateMeal(mealId, meal);
+      if (!result.ok) return result.error;
+      setFoods((prev) => prev.map((f) => (f.id === mealId ? normalizeFood(result.data) : f)));
+      setToast({ text: `Updated "${meal.name}"` });
+      return null;
+    }
     if (foods.some((f) => f.name.toLowerCase() === meal.name.toLowerCase())) {
       return `You already have a food called "${meal.name}". Pick another name.`;
     }
@@ -165,6 +176,37 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return null;
   }
 
+  /** ★ on a logged item: put that food (or a quick entry, as a one-portion meal) on Quick add. */
+  async function favoriteFromEntry(entry: FoodEntry) {
+    const food = entry.food_id ? foods.find((f) => f.id === entry.food_id) : undefined;
+    if (food) {
+      if (await markFavorite(food, Number(entry.quantity) || favoriteAmount(food))) {
+        setToast({ text: `${food.name} is on Quick add` });
+      }
+      return;
+    }
+    const existing = foods.find((f) => f.name.toLowerCase() === entry.name.toLowerCase());
+    if (existing) {
+      if (await markFavorite(existing, favoriteAmount(existing))) setToast({ text: `${existing.name} is on Quick add` });
+      return;
+    }
+    const result = await saveFood({
+      name: entry.name,
+      base_amount: 1,
+      base_unit: "serving",
+      calories: Number(entry.calories),
+      protein: Number(entry.protein),
+      carbs: Number(entry.carbs),
+      fats: Number(entry.fats),
+      image_path: entry.image_path,
+      is_quick_add: true,
+      quick_add_amount: 1,
+      ingredients: null,
+    });
+    if ("error" in result) setError(result.error);
+    else setToast({ text: `${entry.name} is on Quick add` });
+  }
+
   /** Put a food on Quick add (or change its default amount). */
   async function markFavorite(food: Food, amount: number) {
     const result = await saveFavoriteFromTemplate(food.id, amount, food.image_path);
@@ -176,7 +218,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return true;
   }
 
-  function quickAdd(food: Food, meal: MealType = targetMeal) {
+  function quickAdd(food: Food, meal: MealType) {
     const amount = favoriteAmount(food);
     const saved = insertEntry({
       food_id: food.id,
@@ -269,7 +311,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         <h1 className="text-2xl font-bold tracking-tight">Food</h1>
         <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
           <Link
-            href={`/app?date=${addDays(logDate, -1)}`}
+            href={`/app/food?date=${addDays(logDate, -1)}`}
             className="rounded-lg px-2.5 py-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]"
             aria-label="Previous day"
           >
@@ -282,7 +324,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
             </span>
           ) : (
             <Link
-              href={addDays(logDate, 1) >= today ? "/app" : `/app?date=${addDays(logDate, 1)}`}
+              href={addDays(logDate, 1) >= today ? "/app/food" : `/app/food?date=${addDays(logDate, 1)}`}
               className="rounded-lg px-2.5 py-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--card-hover)] hover:text-[var(--foreground)]"
               aria-label="Next day"
             >
@@ -295,7 +337,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
       {!isToday && (
         <div className="flex items-center justify-between rounded-xl bg-[var(--accent)]/10 px-4 py-2 text-sm">
           <span>You&apos;re editing a past day.</span>
-          <Link href="/app" className="font-medium text-[var(--accent)] hover:underline">
+          <Link href="/app/food" className="font-medium text-[var(--accent)] hover:underline">
             Back to today
           </Link>
         </div>
@@ -333,36 +375,8 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
             >
               + Favorite
             </button>
-            <button
-              type="button"
-              onClick={() => setCreateMealOpen(true)}
-              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--card-hover)]"
-            >
-              + Meal
-            </button>
           </div>
         </div>
-        {favorites.length > 0 && !manage && (
-          <div className="mb-3 flex items-center gap-2">
-            <span className="shrink-0 text-xs text-[var(--muted)]">Add to</span>
-            <div className="grid flex-1 grid-cols-4 gap-1 rounded-xl bg-[var(--card)] p-1" role="radiogroup" aria-label="Meal for Quick add">
-              {MEAL_TYPES.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={targetMeal === m.id}
-                  onClick={() => setTargetMeal(m.id)}
-                  className={`rounded-lg py-1.5 text-xs font-medium transition-colors ${
-                    targetMeal === m.id ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-[var(--foreground)]"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
         {favorites.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-[var(--border)] px-5 py-6 text-center text-sm text-[var(--muted)]">
             Save foods or whole meals you eat often (e.g. 60 g oats + 30 g whey), then log them with one tap.
@@ -380,7 +394,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
                     drag?.item.kind === "favorite" && drag.item.food.id === food.id ? "border-[var(--accent)] opacity-50" : "border-[var(--border)]"
                   }`}
                 >
-                  <button type="button" onClick={() => openAdd(targetMeal, food)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                  <button type="button" onClick={() => openAdd(mealForNow(), food)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
                     <FoodThumb name={food.name} path={food.image_path} size={40} />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{food.name}</span>
@@ -413,8 +427,8 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
                   ) : (
                     <button
                       type="button"
-                      onClick={() => quickAdd(food)}
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-lg font-semibold text-white transition-colors hover:bg-[var(--accent-hover)]"
+                      onClick={() => setChoosingMealFor(food)}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-lg font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)]"
                       aria-label={`Log ${food.name}`}
                     >
                       +
@@ -426,7 +440,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
           </div>
         )}
         {favorites.length > 0 && !manage && (
-          <p className="mt-2 text-xs text-[var(--muted)]">Tip: hold a card and drag it onto a meal below. Hold a logged food to move it.</p>
+          <p className="mt-2 text-xs text-[var(--muted)]">Tip: tap + to pick a meal, or hold a card and drag it onto a meal below.</p>
         )}
       </section>
 
@@ -510,11 +524,21 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
 
       <DragGhost drag={drag} overLabel={mealLabel(drag?.over ?? null)} />
 
+      <MealChoiceModal
+        food={choosingMealFor}
+        amount={choosingMealFor ? favoriteAmount(choosingMealFor) : 0}
+        onClose={() => setChoosingMealFor(null)}
+        onPick={(meal) => {
+          if (choosingMealFor) quickAdd(choosingMealFor, meal);
+          setChoosingMealFor(null);
+        }}
+      />
+
       {/* Floating add button */}
       <button
         type="button"
         onClick={() => openAdd(mealForNow())}
-        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 flex h-14 items-center gap-2 rounded-2xl sm:bottom-6 sm:right-6 bg-[var(--accent)] px-5 font-semibold text-white shadow-lg transition-colors hover:bg-[var(--accent-hover)]"
+        className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 flex h-14 items-center gap-2 rounded-2xl sm:bottom-6 sm:right-6 bg-[var(--accent)] px-5 font-semibold text-[var(--on-accent)] shadow-lg transition-colors hover:bg-[var(--accent-hover)]"
       >
         <span className="text-xl leading-none">+</span> Add food
       </button>
@@ -556,13 +580,22 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         onOpenNewFoodType={() => setSaveFoodOpen(true)}
         onCreateMeal={() => {
           setAddOpen(false);
-          setCreateMealOpen(true);
+          setFavoriteModal({ editing: null, tab: "combine" });
         }}
       />
-      <CreateMealModal isOpen={createMealOpen} onClose={() => setCreateMealOpen(false)} foods={foods} onSave={saveMeal} />
       <EditEntryModal
         entry={editing}
         food={editing?.food_id ? foods.find((f) => f.id === editing.food_id) ?? null : null}
+        isFavorite={
+          !!editing &&
+          foods.some(
+            (f) => f.is_quick_add && (f.id === editing.food_id || f.name.toLowerCase() === editing.name.toLowerCase())
+          )
+        }
+        onFavorite={() => {
+          if (editing) favoriteFromEntry(editing);
+          setEditing(null);
+        }}
         onClose={() => setEditing(null)}
         onSave={async (update) => {
           if (editing) updateEntry(editing.id, update);
@@ -579,8 +612,10 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         onClose={() => setFavoriteModal(null)}
         foods={foods}
         editing={favoriteModal?.editing ?? null}
+        initialTab={favoriteModal?.tab}
         onEnsureFood={ensureLibraryFood}
         onSave={markFavorite}
+        onSaveMeal={saveMeal}
       />
       <SaveFoodModal
         isOpen={saveFoodOpen}

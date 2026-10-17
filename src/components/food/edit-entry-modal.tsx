@@ -16,12 +16,26 @@ interface EditEntryModalProps {
   onClose: () => void;
   onSave: (update: EntryUpdate) => Promise<boolean>;
   onDelete: () => Promise<void>;
+  /** Already on Quick add (hides the ★ button). */
+  isFavorite: boolean;
+  /** Put this item on Quick add. */
+  onFavorite: () => void;
 }
 
-export function EditEntryModal({ entry, food, onClose, onSave, onDelete }: EditEntryModalProps) {
+export function EditEntryModal({ entry, food, onClose, onSave, onDelete, isFavorite, onFavorite }: EditEntryModalProps) {
   return (
     <Modal isOpen={!!entry} onClose={onClose} title="Edit entry">
-      {entry && <EditForm key={entry.id} entry={entry} food={food} onSave={onSave} onDelete={onDelete} />}
+      {entry && (
+        <EditForm
+          key={entry.id}
+          entry={entry}
+          food={food}
+          onSave={onSave}
+          onDelete={onDelete}
+          isFavorite={isFavorite}
+          onFavorite={onFavorite}
+        />
+      )}
     </Modal>
   );
 }
@@ -29,7 +43,14 @@ export function EditEntryModal({ entry, food, onClose, onSave, onDelete }: EditE
 const input =
   "w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-2.5 tabular-nums outline-none focus:border-[var(--accent)]";
 
-function EditForm({ entry, food, onSave, onDelete }: Omit<EditEntryModalProps, "onClose" | "entry"> & { entry: FoodEntry }) {
+function EditForm({
+  entry,
+  food,
+  onSave,
+  onDelete,
+  isFavorite,
+  onFavorite,
+}: Omit<EditEntryModalProps, "onClose" | "entry"> & { entry: FoodEntry }) {
   const [meal, setMeal] = useState<MealType>(normalizeMealType(entry.meal_type));
   const [amount, setAmount] = useState(String(Number(entry.quantity)));
   const [values, setValues] = useState({
@@ -70,12 +91,23 @@ function EditForm({ entry, food, onSave, onDelete }: Omit<EditEntryModalProps, "
     >
       <div className="flex items-center gap-3">
         <FoodThumb name={entry.name} path={entry.image_path} size={44} />
-        <div>
-          <p className="font-semibold">{entry.name}</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold">{entry.name}</p>
           <p className="text-xs text-[var(--muted)]">
             {Math.round(fromFood?.calories ?? Number(values.calories))} kcal
           </p>
         </div>
+        {isFavorite ? (
+          <span className="shrink-0 text-xs text-[var(--muted)]">★ On Quick add</span>
+        ) : (
+          <button
+            type="button"
+            onClick={onFavorite}
+            className="shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:border-[var(--accent)]/60 hover:text-[var(--accent)]"
+          >
+            ★ Add to Quick add
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -143,7 +175,7 @@ function EditForm({ entry, food, onSave, onDelete }: Omit<EditEntryModalProps, "
         <button
           type="submit"
           disabled={busy || (!!food && amountNum <= 0)}
-          className="flex-1 rounded-xl bg-[var(--accent)] py-3 font-semibold text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
+          className="flex-1 rounded-xl bg-[var(--accent)] py-3 font-semibold text-[var(--on-accent)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
         >
           Save
         </button>

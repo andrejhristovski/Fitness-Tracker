@@ -4,12 +4,14 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { Ingredient } from "@/types/database";
 
 /*
  * Database schema (PostgreSQL). Change it here, then run `npm run db:generate`
@@ -108,6 +110,8 @@ export const foods = pgTable(
     is_quick_add: boolean("is_quick_add").notNull().default(false),
     quick_add_amount: doublePrecision("quick_add_amount"),
     image_path: text("image_path"),
+    /** For saved meals (base_unit "serving"): what they're made of, so they can be edited later. */
+    ingredients: jsonb("ingredients").$type<Ingredient[]>(),
     created_at: createdAt(),
   },
   (t) => [unique("foods_user_name_unique").on(t.user_id, t.name)]

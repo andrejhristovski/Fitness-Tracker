@@ -19,7 +19,22 @@ export interface Food {
   is_quick_add: boolean;
   quick_add_amount: number | null;
   image_path: string | null;
+  /** Saved meals only: their ingredients (null for single foods). */
+  ingredients: Ingredient[] | null;
   created_at: string;
+}
+
+/** One ingredient of a saved meal: a self-contained nutrition snapshot plus the amount used. */
+export interface Ingredient {
+  name: string;
+  base_amount: number;
+  base_unit: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  image_path: string | null;
+  amount: number;
 }
 
 export interface FoodEntry {
