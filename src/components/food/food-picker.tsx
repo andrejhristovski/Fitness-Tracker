@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Food } from "@/types/database";
 import { FOOD_LIBRARY, findLibraryFood, type LibraryFood } from "@/lib/food-library";
-import { amountPresets } from "@/lib/food-utils";
+import { amountPresets, calculateNutrition, formatAmount } from "@/lib/food-utils";
 import { MACRO_COLORS } from "@/lib/macro-colors";
 import { FoodThumb } from "./food-thumb";
 
@@ -76,6 +76,66 @@ export function MacroPreview({ n }: { n: { calories: number; protein: number; ca
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Selected food header + big amount input + typical-portion chips + live macros. */
+export function AmountPicker({
+  item,
+  amount,
+  onAmountChange,
+  onChange,
+}: {
+  item: Pickable;
+  amount: string;
+  onAmountChange: (value: string) => void;
+  /** Go back to picking a different food; omit to hide the "Change" link. */
+  onChange?: () => void;
+}) {
+  const isMeal = item.base_unit === "serving";
+  const amountNum = Number(amount.replace(",", ".")) || 0;
+  const nutrition = amountNum > 0 ? calculateNutrition(item, amountNum) : null;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 rounded-xl bg-[var(--background)] p-3">
+        <FoodThumb name={item.name} path={item.image_path} size={44} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold">{item.name}</p>
+          <p className="text-xs text-[var(--muted)]">
+            {isMeal ? `${Math.round(item.calories)} kcal per portion` : perLabel(item)}
+          </p>
+        </div>
+        {onChange && (
+          <button type="button" onClick={onChange} className="text-sm font-medium text-[var(--accent)] hover:underline">
+            Change
+          </button>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--background)] pr-4 focus-within:border-[var(--accent)]">
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            aria-label="Amount"
+            className="w-full bg-transparent px-4 py-3 text-2xl font-semibold tabular-nums outline-none"
+          />
+          <span className="text-[var(--muted)]">{isMeal ? "portion" : item.base_unit}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {presetsFor(item).map((a) => (
+            <button key={a} type="button" onClick={() => onAmountChange(String(a))} className={chipClass(amountNum === a)}>
+              {isMeal ? `${a} ×` : formatAmount(a, item.base_unit)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {nutrition && <MacroPreview n={nutrition} />}
     </div>
   );
 }

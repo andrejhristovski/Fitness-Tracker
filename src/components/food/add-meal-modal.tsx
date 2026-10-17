@@ -6,20 +6,17 @@ import { BarcodeScanner } from "./barcode-scanner";
 import type { Food } from "@/types/database";
 import type { LibraryFood } from "@/lib/food-library";
 import { Modal } from "@/components/ui/modal";
-import { calculateNutrition, formatAmount } from "@/lib/food-utils";
+import { calculateNutrition } from "@/lib/food-utils";
 import { MEAL_TYPES, type MealType } from "@/lib/meals";
 import { FoodImagePicker } from "./food-image-picker";
-import { FoodThumb } from "./food-thumb";
 import {
+  AmountPicker,
   FoodSearchList,
-  MacroPreview,
   chipClass,
   defaultAmountFor,
   fromFood,
   fromLibrary,
   inputClass,
-  perLabel,
-  presetsFor,
   type Pickable,
 } from "./food-picker";
 
@@ -155,7 +152,6 @@ function AddMealForm({
   }
 
   const canSubmit = tab === "foods" ? !!nutrition : quick.name.trim() !== "" || quickNutrition.calories > 0;
-  const isMeal = selected?.base_unit === "serving";
 
   return (
     <>
@@ -197,41 +193,7 @@ function AddMealForm({
       {tab === "foods" &&
         (selected ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl bg-[var(--background)] p-3">
-              <FoodThumb name={selected.name} path={selected.image_path} size={44} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-semibold">{selected.name}</p>
-                <p className="text-xs text-[var(--muted)]">
-                  {isMeal ? `${Math.round(selected.calories)} kcal per portion` : perLabel(selected)}
-                </p>
-              </div>
-              <button type="button" onClick={() => setSelected(null)} className="text-sm font-medium text-[var(--accent)] hover:underline">
-                Change
-              </button>
-            </div>
-
-            <div>
-              <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--background)] pr-4 focus-within:border-[var(--accent)]">
-                <input
-                  autoFocus
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  aria-label="Amount"
-                  className="w-full bg-transparent px-4 py-3 text-2xl font-semibold tabular-nums outline-none"
-                />
-                <span className="text-[var(--muted)]">{isMeal ? "portion" : selected.base_unit}</span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {presetsFor(selected).map((a) => (
-                  <button key={a} type="button" onClick={() => setAmount(String(a))} className={chipClass(amountNum === a)}>
-                    {isMeal ? `${a} ×` : formatAmount(a, selected.base_unit)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {nutrition && <MacroPreview n={nutrition} />}
+            <AmountPicker item={selected} amount={amount} onAmountChange={setAmount} onChange={() => setSelected(null)} />
 
             {!selected.food?.is_quick_add && (
               <label className="flex items-center gap-2 text-sm text-[var(--muted)]">

@@ -14,10 +14,13 @@ import { DaySummary } from "./day-summary";
 import { FoodThumb } from "./food-thumb";
 import { AddMealModal, type NewEntry } from "./add-meal-modal";
 import { EditEntryModal, type EntryUpdate } from "./edit-entry-modal";
-import { AddFavoriteModal } from "./add-favorite-modal";
+import { FavoriteModal } from "./favorite-modal";
 import { SaveFoodModal } from "./save-food-modal";
 import { CreateMealModal, type MealDraft } from "./create-meal-modal";
 import type { LibraryFood } from "@/lib/food-library";
+import { DragGhost, useMealDrag } from "./use-meal-drag";
+
+type DragItem = { kind: "favorite"; food: Food } | { kind: "entry"; entry: FoodEntry };
 
 interface FoodTabProps {
   initialEntries: FoodEntry[];
@@ -48,8 +51,10 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   const [favoriteModal, setFavoriteModal] = useState<{ editing: Food | null } | null>(null);
   const [saveFoodOpen, setSaveFoodOpen] = useState(false);
   const [manage, setManage] = useState(false);
+  /** Meal that Quick add's + button logs into; starts at the meal for the current time. */
+  const [targetMeal, setTargetMeal] = useState<MealType>(() => mealForNow());
   const [createMealOpen, setCreateMealOpen] = useState(false);
-  const [toast, setToast] = useState<{ text: string; undoId?: string } | null>(null);
+  const [toast, setToast] = useState<{ text: string; onUndo?: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -140,9 +145,19 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return null;
   }
 
-  async function quickAdd(food: Food) {
+  /** Put a food on Quick add (or change its default amount). */
+  async function markFavorite(food: Food, amount: number) {
+    const result = await saveFavoriteFromTemplate(food.id, amount, food.image_path);
+    if (!result.ok) {
+      setError(result.error);
+      return false;
+    }
+    setFoods((prev) => prev.map((f) => (f.id === food.id ? result.data : f)));
+    return true;
+  }
+
+  async function quickAdd(food: Food, meal: MealType = targetMeal) {
     const amount = favoriteAmount(food);
-    const meal = mealForNow();
     const created = await insertEntry({
       food_id: food.id,
       name: food.name,
@@ -153,7 +168,10 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     });
     if (created) {
       const label = MEAL_TYPES.find((m) => m.id === meal)!.label;
-      setToast({ text: `Added ${food.name} (${formatAmount(amount, food.base_unit)}) to ${label}`, undoId: created.id });
+      setToast({
+        text: `Added ${food.name} (${formatAmount(amount, food.base_unit)}) to ${label}`,
+        onUndo: () => deleteEntry(created.id),
+      });
     }
   }
 
@@ -168,7 +186,27 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return true;
   }
 
-  async function updateEntry(id: string, update: EntryUpdate) {
+  /** Delete with a few seconds to undo (Undo logs the same item again). */
+  async function removeEntry(entry: FoodEntry) {
+    if (!(await deleteEntry(entry.id))) return;
+    setToast({
+      text: `Removed ${entry.name}`,
+      onUndo: () =>
+        insertEntry({
+          food_id: entry.food_id,
+          name: entry.name,
+          calories: Number(entry.calories),
+          protein: Number(entry.protein),
+          carbs: Number(entry.carbs),
+          fats: Number(entry.fats),
+          quantity: Number(entry.quantity),
+          meal_type: normalizeMealType(entry.meal_type),
+          image_path: entry.image_path,
+        }),
+    });
+  }
+
+  async function updateEntry(id: string, update: Partial<EntryUpdate>) {
     const supabase = createClient();
     const { data, error: err } = await supabase.from("food_entries").update(update).eq("id", id).select().single();
     if (err || !data) {
@@ -178,6 +216,16 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     setEntries((prev) => prev.map((e) => (e.id === id ? (data as FoodEntry) : e)));
     return true;
   }
+
+  // Drag a favorite onto a meal to log it there, or drag a logged item to another meal to move it.
+  const { drag, bind } = useMealDrag<DragItem>((item, meal) => {
+    if (item.kind === "favorite") {
+      quickAdd(item.food, meal);
+    } else if (normalizeMealType(item.entry.meal_type) !== meal) {
+      updateEntry(item.entry.id, { meal_type: meal });
+    }
+  });
+  const mealLabel = (id: MealType | null) => MEAL_TYPES.find((m) => m.id === id)?.label ?? null;
 
   function openAdd(meal: MealType, food?: Food) {
     setDefaultMeal(meal);
@@ -267,6 +315,27 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
             </button>
           </div>
         </div>
+        {favorites.length > 0 && !manage && (
+          <div className="mb-3 flex items-center gap-2">
+            <span className="shrink-0 text-xs text-[var(--muted)]">Add to</span>
+            <div className="grid flex-1 grid-cols-4 gap-1 rounded-xl bg-[var(--card)] p-1" role="radiogroup" aria-label="Meal for Quick add">
+              {MEAL_TYPES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={targetMeal === m.id}
+                  onClick={() => setTargetMeal(m.id)}
+                  className={`rounded-lg py-1.5 text-xs font-medium transition-colors ${
+                    targetMeal === m.id ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {favorites.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-[var(--border)] px-5 py-6 text-center text-sm text-[var(--muted)]">
             Save foods or whole meals you eat often (e.g. 60 g oats + 30 g whey), then log them with one tap.
@@ -279,9 +348,12 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
               return (
                 <div
                   key={food.id}
-                  className="flex items-center gap-2.5 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-2.5 transition-colors hover:border-[var(--accent)]/40"
+                  {...(manage ? {} : bind({ kind: "favorite", food }, food.name))}
+                  className={`flex items-center gap-2.5 rounded-2xl border bg-[var(--card)] p-2.5 transition-colors hover:border-[var(--accent)]/40 ${
+                    drag?.item.kind === "favorite" && drag.item.food.id === food.id ? "border-[var(--accent)] opacity-50" : "border-[var(--border)]"
+                  }`}
                 >
-                  <button type="button" onClick={() => openAdd(mealForNow(), food)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                  <button type="button" onClick={() => openAdd(targetMeal, food)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
                     <FoodThumb name={food.name} path={food.image_path} size={40} />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{food.name}</span>
@@ -326,6 +398,9 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
             })}
           </div>
         )}
+        {favorites.length > 0 && !manage && (
+          <p className="mt-2 text-xs text-[var(--muted)]">Tip: hold a card and drag it onto a meal below. Hold a logged food to move it.</p>
+        )}
       </section>
 
       {/* Meals */}
@@ -334,7 +409,17 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
           const items = entries.filter((e) => normalizeMealType(e.meal_type) === meal.id);
           const kcal = items.reduce((s, e) => s + Number(e.calories), 0);
           return (
-            <div key={meal.id} className="rounded-2xl border border-[var(--border)] bg-[var(--card)]">
+            <div
+              key={meal.id}
+              data-meal={meal.id}
+              className={`rounded-2xl border bg-[var(--card)] transition-colors ${
+                drag?.over === meal.id
+                  ? "border-[var(--accent)] bg-[var(--accent)]/10 ring-2 ring-[var(--accent)]/40"
+                  : drag
+                    ? "border-dashed border-[var(--muted)]"
+                    : "border-[var(--border)]"
+              }`}
+            >
               <div className="flex items-center justify-between px-4 py-3">
                 <div>
                   <h3 className="font-semibold">{meal.label}</h3>
@@ -353,11 +438,17 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
               {items.length > 0 && (
                 <ul className="border-t border-[var(--border)]">
                   {items.map((e) => (
-                    <li key={e.id} className="border-b border-[var(--border)] last:border-b-0">
+                    <li
+                      key={e.id}
+                      {...bind({ kind: "entry", entry: e }, e.name)}
+                      className={`flex items-center border-b border-[var(--border)] transition-colors last:border-b-0 hover:bg-[var(--card-hover)] ${
+                        drag?.item.kind === "entry" && drag.item.entry.id === e.id ? "opacity-40" : ""
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={() => setEditing(e)}
-                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--card-hover)]"
+                        className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left"
                       >
                         <FoodThumb name={e.name} path={e.image_path} size={36} />
                         <span className="min-w-0 flex-1">
@@ -369,6 +460,18 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
                         </span>
                         <span className="text-sm font-semibold tabular-nums">{Math.round(Number(e.calories))}</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => removeEntry(e)}
+                        // Don't let a press on the bin start a drag of the row.
+                        onPointerDown={(ev) => ev.stopPropagation()}
+                        className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--muted)] transition-colors hover:text-red-400"
+                        aria-label={`Remove ${e.name}`}
+                      >
+                        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                        </svg>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -377,6 +480,8 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
           );
         })}
       </section>
+
+      <DragGhost drag={drag} overLabel={mealLabel(drag?.over ?? null)} />
 
       {/* Floating add button */}
       <button
@@ -390,13 +495,13 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
       {toast && (
         <div className="fixed bottom-[calc(9.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 sm:bottom-24 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--card-hover)] px-4 py-3 text-sm shadow-xl">
           <span className="min-w-0 truncate">{toast.text}</span>
-          {toast.undoId && (
+          {toast.onUndo && (
             <button
               type="button"
-              onClick={async () => {
-                const id = toast.undoId!;
+              onClick={() => {
+                const undo = toast.onUndo!;
                 setToast(null);
-                await deleteEntry(id);
+                undo();
               }}
               className="shrink-0 font-semibold text-[var(--accent)]"
             >
@@ -416,9 +521,7 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         onAdd={async (entry) => !!(await insertEntry(entry))}
         onEnsureFood={ensureLibraryFood}
         onFavorite={async (food, amount) => {
-          const result = await saveFavoriteFromTemplate(food.id, amount, food.image_path);
-          if (result.ok) setFoods((prev) => prev.map((f) => (f.id === food.id ? result.data : f)));
-          else setError(result.error);
+          await markFavorite(food, amount);
         }}
         onOpenNewFoodType={() => setSaveFoodOpen(true)}
         onCreateMeal={() => {
@@ -440,18 +543,13 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
           if (editing && (await deleteEntry(editing.id))) setEditing(null);
         }}
       />
-      <AddFavoriteModal
+      <FavoriteModal
         isOpen={favoriteModal !== null}
         onClose={() => setFavoriteModal(null)}
         foods={foods}
-        editingFood={favoriteModal?.editing ?? null}
-        onSaved={(food) => {
-          const normalized = normalizeFood(food);
-          setFoods((prev) =>
-            prev.some((f) => f.id === normalized.id) ? prev.map((f) => (f.id === normalized.id ? normalized : f)) : [...prev, normalized]
-          );
-        }}
-        onOpenNewFoodType={() => setSaveFoodOpen(true)}
+        editing={favoriteModal?.editing ?? null}
+        onEnsureFood={ensureLibraryFood}
+        onSave={markFavorite}
       />
       <SaveFoodModal
         isOpen={saveFoodOpen}
