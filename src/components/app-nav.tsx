@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth-client";
 
 const ICON = {
   fill: "none",
@@ -65,7 +65,7 @@ function useIsActive() {
 export function SignOutButton({ className = "" }: { className?: string }) {
   const router = useRouter();
   async function handleSignOut() {
-    await createClient().auth.signOut();
+    await authClient.signOut();
     router.push("/login");
     router.refresh();
   }

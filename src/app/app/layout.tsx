@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/session";
 import { AppNav, BottomNav } from "@/components/app-nav";
 import { TimezoneSync } from "@/components/timezone-sync";
 
@@ -8,14 +7,7 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
+  await requireUser();
 
   return (
     <div className="min-h-screen flex flex-col">

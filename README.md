@@ -1,107 +1,81 @@
 # Fitness Tracker
 
-A personal fitness tracking web app built with **Next.js** (App Router), **TypeScript**, **Tailwind CSS**, and **Supabase**. Track daily food intake, workouts, exercises, and body stats with email/password authentication.
+A personal fitness app (installable on your phone) built with **Next.js** (App Router), **TypeScript**, **Tailwind CSS**, **PostgreSQL**, **Drizzle ORM** and **Better Auth**. Track food (with barcode scanning and a built-in food list), workouts (daily max per exercise, workout days), body weight and stats.
 
-## Features
+Everything is self-hosted: the database and user accounts live in your own Postgres.
 
-- **Auth**: Email/password sign up and sign in via Supabase Auth
-- **Food**: Log meals, save frequent foods, view daily calorie and macro totals
-- **Workouts**: Create sessions by date, add exercises (sets, reps, weight, notes)
-- **Stats**: Body weight history, workout frequency by week, nutrition daily totals
-- **Protected routes**: Only logged-in users can access `/app/*`
-- **Dark UI**: Mobile-first, modern dark theme
+## Stack
 
-## Setup
+| Part | What |
+| --- | --- |
+| App + backend | Next.js 16 — pages render on the server, data changes go through **server actions** (`src/app/actions/`) |
+| Database | PostgreSQL 17 (Docker) |
+| Queries & migrations | Drizzle ORM — schema in `src/db/schema.ts`, SQL migrations in `drizzle/` |
+| Accounts | Better Auth — email + password, sessions in Postgres (`src/lib/auth.ts`) |
 
-### 1. Install dependencies
+Every query is scoped to the signed-in user (`user_id` on every table, checked in server actions).
+
+## Local development
+
+Requirements: Node.js 20+ and Docker Desktop.
 
 ```bash
 npm install
+cp .env.example .env.local      # then set BETTER_AUTH_SECRET to a long random string
+npm run db:up                   # starts Postgres in Docker (docker-compose.dev.yml)
+npm run dev                     # http://localhost:3000
 ```
 
-### 2. Supabase project
+Migrations run automatically when the app starts (`src/instrumentation.ts`). Open http://localhost:3000, create an account, and you're in.
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. In the SQL Editor, run the schema: copy the contents of `supabase/schema.sql` and execute it.
-3. In Project Settings → API, copy the **Project URL** and **anon (public) key**.
+### Database scripts
 
-### 3. Environment variables
+| Command | What it does |
+| --- | --- |
+| `npm run db:up` | Start local Postgres |
+| `npm run db:generate` | Create a migration after changing `src/db/schema.ts` |
+| `npm run db:migrate` | Apply migrations manually (normally automatic on startup) |
+| `npm run db:studio` | Browse the database in Drizzle Studio |
 
-Copy the example env file and fill in your Supabase credentials:
+## Deployment (Docker)
+
+The `Dockerfile` builds a small standalone image; GitHub Actions publishes it to GHCR on every push to `main`.
+
+`deployment.yml` runs the app and a Postgres container (database only reachable by the app). Provide these variables, e.g. in a `.env` file next to it:
+
+```
+POSTGRES_PASSWORD=<long random string>
+BETTER_AUTH_SECRET=<long random string, e.g. openssl rand -base64 32>
+BETTER_AUTH_URL=https://your-domain.example
+SHARED_NETWORK_NAME=<your reverse-proxy network>
+```
 
 ```bash
-cp .env.local.example .env.local
+docker compose -f deployment.yml up -d
 ```
 
-Edit `.env.local`:
+The app needs HTTPS (via your reverse proxy) to be installable on phones and to use the camera for barcode scanning.
 
-```
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-```
-
-### 4. Run the app
+**Backups:** the data lives in the `fitness-db` volume. A simple nightly dump:
 
 ```bash
-npm run dev
+docker exec shema.fitnessdb pg_dump -U fitness fitness | gzip > fitness-$(date +%F).sql.gz
 ```
-
-Open [http://localhost:3000](http://localhost:3000). You’ll be redirected to `/login`. Sign up, then you’ll be redirected to the dashboard at `/app`.
 
 ## Project structure
 
 ```
 src/
 ├── app/
-│   ├── app/              # Protected app (dashboard)
-│   │   ├── layout.tsx    # App shell + nav
-│   │   ├── page.tsx      # Food tab (default)
-│   │   ├── workouts/
-│   │   └── stats/
-│   ├── login/
-│   ├── signup/
-│   ├── layout.tsx
-│   └── page.tsx          # Redirects to /login or /app
-├── components/
-│   ├── app-nav.tsx       # Tabs + sign out
-│   ├── food/             # Food tab components
-│   ├── workouts/         # Workout components
-│   └── stats/            # Stats components
-├── lib/
-│   └── supabase/
-│       ├── client.ts     # Browser client
-│       ├── server.ts     # Server client
-│       └── middleware.ts # Session refresh + route protection
-├── types/
-│   └── database.ts       # DB types
-└── middleware.ts        # Auth middleware
+│   ├── actions/        # Server actions (food, workouts, profile)
+│   ├── api/auth/       # Better Auth endpoints
+│   ├── app/            # Signed-in app: Food (/app), Workouts, Stats, Settings
+│   ├── login/ signup/
+│   └── manifest.ts     # PWA manifest
+├── components/         # UI (food, workouts, stats, settings)
+├── db/                 # Drizzle schema + connection
+├── lib/                # auth, session helpers, food/exercise libraries, dates
+├── instrumentation.ts  # runs migrations on startup
+└── proxy.ts            # redirects signed-out users to /login
+drizzle/                # generated SQL migrations
 ```
-
-## Auth flow
-
-- **`/`** → Redirects to `/login` (guest) or `/app` (logged in).
-- **`/login`, `/signup`** → Public. If already logged in, redirect to `/app`.
-- **`/app`, `/app/workouts`, `/app/stats`** → Protected. If not logged in, redirect to `/login?redirect=/app`.
-- After sign in, user is sent to `redirect` query param or `/app`.
-- Middleware refreshes the Supabase session and sets cookies on each request.
-
-## Database (Supabase)
-
-Tables (all scoped by `user_id` via RLS):
-
-| Table             | Purpose                                  |
-|------------------|------------------------------------------|
-| `foods`          | Saved frequent foods (name, macros)      |
-| `food_entries`   | Logged food per day                      |
-| `workout_sessions` | One session per user per date         |
-| `exercise_entries` | Exercises in a session (name, sets, reps, weight, notes) |
-| `body_logs`      | Weight (and notes) per date              |
-
-Run `supabase/schema.sql` in the Supabase SQL Editor to create tables, indexes, and RLS policies.
-
-## Tech stack
-
-- **Next.js 16** (App Router)
-- **TypeScript**
-- **Tailwind CSS 4**
-- **Supabase** (Auth + Postgres)

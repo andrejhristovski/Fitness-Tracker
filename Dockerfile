@@ -1,20 +1,33 @@
-FROM node:20-alpine
+# --- Install dependencies (including dev deps needed to build) ---
+FROM node:24-alpine AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
 
-ENV NODE_ENV=production
-
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nextjs -u 1001
-
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
-
-RUN \
-  if [ -f package-lock.json ]; then npm ci; \
-  elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
-  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm install --frozen-lockfile; \
-  else npm install; \
-  fi
-
+# --- Build the Next.js app once, at image build time ---
+FROM node:24-alpine AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+RUN npm run build
+
+# --- Small runtime image: just the standalone server + migrations ---
+FROM node:24-alpine AS run
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+
+COPY --from=build /app/public ./public
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+# SQL migrations, applied automatically on startup (src/instrumentation.ts).
+COPY --from=build /app/drizzle ./drizzle
+
+USER nextjs
 EXPOSE 3000
-CMD ["sh", "-c", "npm run build && npm start"]
+CMD ["node", "server.js"]

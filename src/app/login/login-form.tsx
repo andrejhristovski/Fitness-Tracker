@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth-client";
 import { AuthField, AuthMessage, AuthSubmit, PasswordField } from "@/components/auth-shell";
 
 export function LoginForm() {
@@ -18,10 +18,10 @@ export function LoginForm() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const { error: err } = await createClient().auth.signInWithPassword({ email: email.trim(), password });
+    const { error: err } = await authClient.signIn.email({ email: email.trim(), password });
     setLoading(false);
     if (err) {
-      setError(err.message === "Invalid login credentials" ? "Wrong email or password." : err.message);
+      setError(err.status === 401 ? "Wrong email or password." : err.message || "Couldn't sign in. Try again.");
       return;
     }
     router.push(redirectTo);

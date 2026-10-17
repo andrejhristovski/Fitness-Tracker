@@ -4,12 +4,19 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Food, FoodEntry } from "@/types/database";
 import type { NutritionGoals } from "@/lib/nutrition-goals";
-import { createClient } from "@/lib/supabase/client";
 import { normalizeFood } from "@/lib/normalize-food";
 import { calculateNutrition, formatAmount } from "@/lib/food-utils";
 import { addDays, parseDate } from "@/lib/dates";
 import { MEAL_TYPES, mealForNow, normalizeMealType, type MealType } from "@/lib/meals";
-import { removeFavorite, saveFavoriteFromTemplate } from "@/app/actions/food-actions";
+import {
+  addFoodEntry,
+  createFood,
+  deleteFoodEntry,
+  removeFavorite,
+  saveFavoriteFromTemplate,
+  updateFoodEntry,
+  type NewFood,
+} from "@/app/actions/food-actions";
 import { DaySummary } from "./day-summary";
 import { FoodThumb } from "./food-thumb";
 import { AddMealModal, type NewEntry } from "./add-meal-modal";
@@ -75,37 +82,23 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   );
 
   async function insertEntry(entry: NewEntry): Promise<FoodEntry | null> {
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return null;
-    const { data, error: err } = await supabase
-      .from("food_entries")
-      .insert({ ...entry, user_id: user.id, log_date: logDate })
-      .select()
-      .single();
-    if (err || !data) {
-      setError(err?.message ?? "Couldn't save the entry.");
+    const result = await addFoodEntry({ ...entry, log_date: logDate });
+    if (!result.ok) {
+      setError(result.error);
       return null;
     }
-    setEntries((prev) => [...prev, data as FoodEntry]);
-    return data as FoodEntry;
+    setEntries((prev) => [...prev, result.data]);
+    return result.data;
   }
 
   /** Insert a food row for the user, or return the one they already have with that name. */
-  async function saveFood(row: Omit<Food, "id" | "user_id" | "created_at">): Promise<{ food: Food } | { error: string }> {
+  async function saveFood(row: NewFood): Promise<{ food: Food } | { error: string }> {
     const existing = foods.find((f) => f.name.toLowerCase() === row.name.toLowerCase());
     if (existing) return { food: existing };
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { error: "Not signed in" };
-    const { data, error: err } = await supabase.from("foods").insert({ ...row, user_id: user.id }).select().single();
-    if (err || !data) return { error: err?.message ?? "Couldn't save the food." };
-    const food = normalizeFood(data);
-    setFoods((prev) => [...prev, food].sort((a, b) => a.name.localeCompare(b.name)));
+    const result = await createFood(row);
+    if (!result.ok) return { error: result.error };
+    const food = result.data;
+    if (!result.existed) setFoods((prev) => [...prev, food].sort((a, b) => a.name.localeCompare(b.name)));
     return { food };
   }
 
@@ -176,10 +169,9 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   }
 
   async function deleteEntry(id: string) {
-    const supabase = createClient();
-    const { error: err } = await supabase.from("food_entries").delete().eq("id", id);
-    if (err) {
-      setError(err.message);
+    const result = await deleteFoodEntry(id);
+    if (!result.ok) {
+      setError(result.error);
       return false;
     }
     setEntries((prev) => prev.filter((e) => e.id !== id));
@@ -207,13 +199,12 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   }
 
   async function updateEntry(id: string, update: Partial<EntryUpdate>) {
-    const supabase = createClient();
-    const { data, error: err } = await supabase.from("food_entries").update(update).eq("id", id).select().single();
-    if (err || !data) {
-      setError(err?.message ?? "Couldn't update the entry.");
+    const result = await updateFoodEntry(id, update);
+    if (!result.ok) {
+      setError(result.error);
       return false;
     }
-    setEntries((prev) => prev.map((e) => (e.id === id ? (data as FoodEntry) : e)));
+    setEntries((prev) => prev.map((e) => (e.id === id ? result.data : e)));
     return true;
   }
 

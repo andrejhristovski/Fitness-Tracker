@@ -1,18 +1,52 @@
 name: wgc.base.services
 version: '3.8'
 
+# Required environment variables (e.g. in a .env file next to this file):
+#   POSTGRES_PASSWORD   - database password (long random string)
+#   BETTER_AUTH_SECRET  - session signing secret, e.g. `openssl rand -base64 32`
+#   BETTER_AUTH_URL     - public URL of the app, e.g. https://fitness.example.com
+#   SHARED_NETWORK_NAME - your existing reverse-proxy network
+
 services:
   shema.fitnessapp:
     image: ghcr.io/andrejhristovski/andrejhristovski/fitness-tracker:latest
     container_name: shema.fitnessapp
     environment:
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - DATABASE_URL=postgres://fitness:${POSTGRES_PASSWORD}@shema.fitnessdb:5432/fitness
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL}
+    depends_on:
+      shema.fitnessdb:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - shema.public
+      - fitness.internal
+
+  shema.fitnessdb:
+    image: postgres:17-alpine
+    container_name: shema.fitnessdb
+    environment:
+      - POSTGRES_USER=fitness
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=fitness
+    volumes:
+      - fitness-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fitness -d fitness"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    # Only reachable by the app, never exposed publicly.
+    networks:
+      - fitness.internal
+
+volumes:
+  fitness-db:
 
 networks:
   shema.public:
     external: true
     name: ${SHARED_NETWORK_NAME}
+  fitness.internal: {}

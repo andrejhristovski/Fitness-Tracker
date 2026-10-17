@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createFood } from "@/app/actions/food-actions";
 import type { Food } from "@/types/database";
 import { Modal } from "@/components/ui/modal";
 
@@ -42,35 +42,22 @@ export function SaveFoodModal({ isOpen, onClose, onSaved }: SaveFoodModalProps) 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("foods")
-      .insert({
-        user_id: user.id,
-        name: name.trim(),
-        base_amount: Number(baseAmount) || DEFAULT_BASE_AMOUNT,
-        base_unit: baseUnit.trim() || DEFAULT_BASE_UNIT,
-        calories: Number(calories) || 0,
-        protein: Number(protein) || 0,
-        carbs: Number(carbs) || 0,
-        fats: Number(fats) || 0,
-      })
-      .select()
-      .single();
+    const result = await createFood({
+      name: name.trim(),
+      base_amount: Number(baseAmount) || DEFAULT_BASE_AMOUNT,
+      base_unit: baseUnit.trim() || DEFAULT_BASE_UNIT,
+      calories: Number(calories) || 0,
+      protein: Number(protein) || 0,
+      carbs: Number(carbs) || 0,
+      fats: Number(fats) || 0,
+      is_quick_add: false,
+      quick_add_amount: null,
+      image_path: null,
+    });
 
     setLoading(false);
-    if (error) return;
-    if (data) {
-      onSaved({
-        ...data,
-        is_quick_add: Boolean(data.is_quick_add),
-        quick_add_amount: data.quick_add_amount != null ? Number(data.quick_add_amount) : null,
-      });
+    if (result.ok) {
+      onSaved(result.data);
       handleClose();
     }
   }

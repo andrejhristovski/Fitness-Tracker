@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { saveSettings } from "@/app/actions/profile-actions";
 import type { UserSettings } from "@/types/database";
 import { MACRO_COLORS } from "@/lib/macro-colors";
 
 interface SettingsFormProps {
-  userId: string;
   initialSettings: UserSettings | null;
 }
 
@@ -95,7 +94,7 @@ function Row({
   );
 }
 
-export function SettingsForm({ userId, initialSettings }: SettingsFormProps) {
+export function SettingsForm({ initialSettings }: SettingsFormProps) {
   const [form, setForm] = useState<FormState>(() => toFormState(initialSettings));
   const [saved, setSaved] = useState<FormState>(() => toFormState(initialSettings));
   const [saving, setSaving] = useState(false);
@@ -118,22 +117,18 @@ export function SettingsForm({ userId, initialSettings }: SettingsFormProps) {
     e.preventDefault();
     setSaving(true);
     setStatus(null);
-    const { error } = await createClient().from("user_settings").upsert(
-      {
-        user_id: userId,
-        height_cm: form.height_cm ? n(form.height_cm) : null,
-        current_weight_kg: form.current_weight_kg ? n(form.current_weight_kg) : null,
-        target_weight_kg: form.target_weight_kg ? n(form.target_weight_kg) : null,
-        calories_goal: Math.round(n(form.calories_goal)) || 2000,
-        protein_goal: Math.round(n(form.protein_goal)) || 150,
-        carbs_goal: Math.round(n(form.carbs_goal)) || 250,
-        fats_goal: Math.round(n(form.fats_goal)) || 65,
-      },
-      { onConflict: "user_id" }
-    );
+    const result = await saveSettings({
+      height_cm: form.height_cm ? n(form.height_cm) : null,
+      current_weight_kg: form.current_weight_kg ? n(form.current_weight_kg) : null,
+      target_weight_kg: form.target_weight_kg ? n(form.target_weight_kg) : null,
+      calories_goal: Math.round(n(form.calories_goal)) || 2000,
+      protein_goal: Math.round(n(form.protein_goal)) || 150,
+      carbs_goal: Math.round(n(form.carbs_goal)) || 250,
+      fats_goal: Math.round(n(form.fats_goal)) || 65,
+    });
     setSaving(false);
-    if (error) {
-      setStatus({ ok: false, text: `Couldn't save: ${error.message}` });
+    if (!result.ok) {
+      setStatus({ ok: false, text: `Couldn't save: ${result.error}` });
       return;
     }
     setSaved(form);

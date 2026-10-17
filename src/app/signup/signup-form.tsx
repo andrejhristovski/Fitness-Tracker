@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth-client";
 import { AuthField, AuthMessage, AuthSubmit, PasswordField } from "@/components/auth-shell";
 
 export function SignupForm() {
@@ -11,36 +11,26 @@ export function SignupForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setMessage(null);
     setLoading(true);
-    const { data, error: err } = await createClient().auth.signUp({
-      email: email.trim(),
-      password,
-      options: { emailRedirectTo: `${window.location.origin}/app` },
-    });
+    const trimmed = email.trim();
+    // Signs the new user in straight away.
+    const { error: err } = await authClient.signUp.email({ email: trimmed, password, name: trimmed.split("@")[0] });
     setLoading(false);
     if (err) {
-      setError(err.message);
+      setError(err.message || "Couldn't create the account. Try again.");
       return;
     }
-    // No email confirmation required: the user is signed in already.
-    if (data.session) {
-      router.push("/app");
-      router.refresh();
-      return;
-    }
-    setMessage("Almost done — check your email to confirm your account, then sign in.");
+    router.push("/app");
+    router.refresh();
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && <AuthMessage kind="error">{error}</AuthMessage>}
-      {message && <AuthMessage kind="success">{message}</AuthMessage>}
       <AuthField
         label="Email"
         type="email"

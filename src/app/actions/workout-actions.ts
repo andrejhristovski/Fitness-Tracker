@@ -1,7 +1,11 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { db, schema } from "@/db";
+import { withUser } from "@/lib/action-result";
 import type { ExerciseDefinition } from "@/types/database";
+
+const { exerciseDefinitions, workoutTemplates, workoutTemplateExercises, workoutSessions, exerciseEntries } = schema;
 
 /** All daily maxes are stored as exercise entries in one session per day with this name. */
 const DAILY_SESSION_NAME = "Daily log";
@@ -13,15 +17,14 @@ export type MaxLog = { date: string; kg: number };
 export type DayPlan = { id: string; name: string; exerciseIds: string[] };
 
 type ExerciseInput = { name: string; muscle_group: string | null };
-type Supabase = Awaited<ReturnType<typeof createClient>>;
 
 /** Save any exercises the user doesn't have yet; returns the new rows and the id for every item, in order. */
-async function ensureDefinitions(supabase: Supabase, userId: string, items: ExerciseInput[]) {
-  const { data: existing } = await supabase
-    .from("exercise_definitions")
-    .select("id, name")
-    .eq("user_id", userId);
-  const idByName = new Map((existing ?? []).map((d) => [d.name.toLowerCase(), d.id as string]));
+async function ensureDefinitions(userId: string, items: ExerciseInput[]) {
+  const existing = await db
+    .select({ id: exerciseDefinitions.id, name: exerciseDefinitions.name })
+    .from(exerciseDefinitions)
+    .where(eq(exerciseDefinitions.user_id, userId));
+  const idByName = new Map(existing.map((d) => [d.name.toLowerCase(), d.id]));
 
   const cleaned = items
     .map((i) => ({ name: i.name.trim(), muscle_group: i.muscle_group?.trim() || null }))
@@ -34,12 +37,10 @@ async function ensureDefinitions(supabase: Supabase, userId: string, items: Exer
 
   let created: ExerciseDefinition[] = [];
   if (missing.length > 0) {
-    const { data, error } = await supabase
-      .from("exercise_definitions")
-      .insert(missing.map((i) => ({ ...i, user_id: userId })))
-      .select();
-    if (error) return { error: error.message };
-    created = (data ?? []) as ExerciseDefinition[];
+    created = await db
+      .insert(exerciseDefinitions)
+      .values(missing.map((i) => ({ ...i, user_id: userId })))
+      .returning();
     for (const d of created) idByName.set(d.name.toLowerCase(), d.id);
   }
 
@@ -48,182 +49,166 @@ async function ensureDefinitions(supabase: Supabase, userId: string, items: Exer
 }
 
 /** Append exercises to a day (skips ones already in it); returns the day's full ordered list. */
-async function appendToPlan(supabase: Supabase, planId: string, ids: string[]) {
-  const { data: rows } = await supabase
-    .from("workout_template_exercises")
-    .select("exercise_definition_id, sort_order")
-    .eq("template_id", planId)
-    .order("sort_order");
-  const current = (rows ?? []).map((r) => r.exercise_definition_id as string);
+async function appendToPlan(userId: string, planId: string, ids: string[]) {
+  const rows = await db
+    .select({ id: workoutTemplateExercises.exercise_definition_id, sort: workoutTemplateExercises.sort_order })
+    .from(workoutTemplateExercises)
+    .where(and(eq(workoutTemplateExercises.template_id, planId), eq(workoutTemplateExercises.user_id, userId)))
+    .orderBy(asc(workoutTemplateExercises.sort_order));
+  const current = rows.map((r) => r.id);
   const toAdd = ids.filter((id) => !current.includes(id));
   if (toAdd.length > 0) {
-    const start = (rows ?? []).reduce((m, r) => Math.max(m, r.sort_order + 1), 0);
-    const { error } = await supabase.from("workout_template_exercises").insert(
-      toAdd.map((id, i) => ({ template_id: planId, exercise_definition_id: id, sort_order: start + i }))
+    const start = rows.reduce((m, r) => Math.max(m, r.sort + 1), 0);
+    await db.insert(workoutTemplateExercises).values(
+      toAdd.map((id, i) => ({ user_id: userId, template_id: planId, exercise_definition_id: id, sort_order: start + i }))
     );
-    if (error) return { error: error.message };
   }
-  return { exerciseIds: [...current, ...toAdd] };
+  return [...current, ...toAdd];
+}
+
+async function ownsTemplate(userId: string, planId: string) {
+  const [row] = await db
+    .select({ id: workoutTemplates.id })
+    .from(workoutTemplates)
+    .where(and(eq(workoutTemplates.id, planId), eq(workoutTemplates.user_id, userId)));
+  return !!row;
 }
 
 /** Add exercises to the user's list (skips names already saved), optionally also to a day. */
-export async function addExercises(
-  items: ExerciseInput[],
-  planId: string | null
-): Promise<
-  { ok: true; created: ExerciseDefinition[]; planExerciseIds: string[] | null } | { ok: false; error: string }
-> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
-
-  const ensured = await ensureDefinitions(supabase, user.id, items);
-  if ("error" in ensured) return { ok: false, error: ensured.error! };
-  if (!planId) return { ok: true, created: ensured.created, planExerciseIds: null };
-
-  const appended = await appendToPlan(supabase, planId, ensured.ids);
-  if ("error" in appended) return { ok: false, error: appended.error! };
-  return { ok: true, created: ensured.created, planExerciseIds: appended.exerciseIds };
+export async function addExercises(items: ExerciseInput[], planId: string | null) {
+  return withUser(async (userId) => {
+    if (planId && !(await ownsTemplate(userId, planId))) return { ok: false as const, error: "Day not found" };
+    const { created, ids } = await ensureDefinitions(userId, items);
+    const planExerciseIds = planId ? await appendToPlan(userId, planId, ids) : null;
+    return { ok: true as const, created, planExerciseIds };
+  });
 }
 
-/**
- * Create one or more workout days, saving any of their exercises the user doesn't have yet.
- * Done in a single action so the client never has to chain server-action calls.
- */
-export async function createDayPlans(
-  days: { name: string; items: ExerciseInput[] }[]
-): Promise<{ ok: true; plans: DayPlan[]; created: ExerciseDefinition[] } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
-
-  const plans: DayPlan[] = [];
-  const created: ExerciseDefinition[] = [];
-  for (const day of days) {
-    const ensured = await ensureDefinitions(supabase, user.id, day.items);
-    if ("error" in ensured) return { ok: false, error: ensured.error! };
-    created.push(...ensured.created);
-
-    const { data: template, error } = await supabase
-      .from("workout_templates")
-      .insert({ user_id: user.id, name: day.name.trim() })
-      .select("id, name")
-      .single();
-    if (error || !template) return { ok: false, error: error?.message ?? "Failed to create day" };
-
-    const appended = await appendToPlan(supabase, template.id, ensured.ids);
-    if ("error" in appended) return { ok: false, error: appended.error! };
-    plans.push({ id: template.id, name: template.name, exerciseIds: appended.exerciseIds });
-  }
-  return { ok: true, plans, created };
+/** Create one or more workout days, saving any of their exercises the user doesn't have yet. */
+export async function createDayPlans(days: { name: string; items: ExerciseInput[] }[]) {
+  return withUser(async (userId) => {
+    const plans: DayPlan[] = [];
+    const created: ExerciseDefinition[] = [];
+    for (const day of days) {
+      const ensured = await ensureDefinitions(userId, day.items);
+      created.push(...ensured.created);
+      const [template] = await db
+        .insert(workoutTemplates)
+        .values({ user_id: userId, name: day.name.trim() })
+        .returning({ id: workoutTemplates.id, name: workoutTemplates.name });
+      const exerciseIds = await appendToPlan(userId, template.id, ensured.ids);
+      plans.push({ id: template.id, name: template.name, exerciseIds });
+    }
+    return { ok: true as const, plans, created };
+  });
 }
 
 /** Rename a day and replace its exercise list (in the given order). */
-export async function updateDayPlan(
-  id: string,
-  name: string,
-  exerciseIds: string[]
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("workout_templates").update({ name: name.trim() }).eq("id", id);
-  if (error) return { ok: false, error: error.message };
+export async function updateDayPlan(id: string, name: string, exerciseIds: string[]) {
+  return withUser(async (userId) => {
+    if (!(await ownsTemplate(userId, id))) return { ok: false as const, error: "Day not found" };
+    // Only link exercises that belong to this user.
+    const valid =
+      exerciseIds.length === 0
+        ? []
+        : (
+            await db
+              .select({ id: exerciseDefinitions.id })
+              .from(exerciseDefinitions)
+              .where(and(eq(exerciseDefinitions.user_id, userId), inArray(exerciseDefinitions.id, exerciseIds)))
+          ).map((r) => r.id);
+    const ordered = exerciseIds.filter((x) => valid.includes(x));
 
-  const { error: delError } = await supabase.from("workout_template_exercises").delete().eq("template_id", id);
-  if (delError) return { ok: false, error: delError.message };
-  if (exerciseIds.length > 0) {
-    const { error: insError } = await supabase.from("workout_template_exercises").insert(
-      exerciseIds.map((exId, i) => ({ template_id: id, exercise_definition_id: exId, sort_order: i }))
-    );
-    if (insError) return { ok: false, error: insError.message };
-  }
-  return { ok: true };
+    await db.transaction(async (tx) => {
+      await tx.update(workoutTemplates).set({ name: name.trim() }).where(eq(workoutTemplates.id, id));
+      await tx.delete(workoutTemplateExercises).where(eq(workoutTemplateExercises.template_id, id));
+      if (ordered.length > 0) {
+        await tx.insert(workoutTemplateExercises).values(
+          ordered.map((exId, i) => ({ user_id: userId, template_id: id, exercise_definition_id: exId, sort_order: i }))
+        );
+      }
+    });
+    return { ok: true as const };
+  });
 }
 
 /** Delete a workout day. Its exercises and their history stay. */
-export async function deleteDayPlan(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("workout_templates").delete().eq("id", id);
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+export async function deleteDayPlan(id: string) {
+  return withUser(async (userId) => {
+    await db.delete(workoutTemplates).where(and(eq(workoutTemplates.id, id), eq(workoutTemplates.user_id, userId)));
+    return { ok: true as const };
+  });
 }
 
 /** Remove an exercise from the user's list. Past entries keep their name but lose the link. */
-export async function deleteExerciseDefinition(
-  id: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("exercise_definitions").delete().eq("id", id);
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+export async function deleteExerciseDefinition(id: string) {
+  return withUser(async (userId) => {
+    await db
+      .delete(exerciseDefinitions)
+      .where(and(eq(exerciseDefinitions.id, id), eq(exerciseDefinitions.user_id, userId)));
+    return { ok: true as const };
+  });
 }
 
 /**
  * Set (or clear, with kg = null) the max weight for an exercise on a date.
  * Stored in that day's "Daily log" session so the stats tab still counts the workout.
  */
-export async function logDailyMax(
-  definition: { id: string; name: string },
-  date: string,
-  kg: number | null
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Not signed in" };
+export async function logDailyMax(definition: { id: string; name: string }, date: string, kg: number | null) {
+  return withUser(async (userId) => {
+    const [owned] = await db
+      .select({ id: exerciseDefinitions.id, name: exerciseDefinitions.name })
+      .from(exerciseDefinitions)
+      .where(and(eq(exerciseDefinitions.id, definition.id), eq(exerciseDefinitions.user_id, userId)));
+    if (!owned) return { ok: false as const, error: "Exercise not found" };
 
-  const { data: found } = await supabase
-    .from("workout_sessions")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("session_date", date)
-    .eq("name", DAILY_SESSION_NAME)
-    .limit(1)
-    .maybeSingle();
+    const [found] = await db
+      .select({ id: workoutSessions.id })
+      .from(workoutSessions)
+      .where(
+        and(
+          eq(workoutSessions.user_id, userId),
+          eq(workoutSessions.session_date, date),
+          eq(workoutSessions.name, DAILY_SESSION_NAME)
+        )
+      )
+      .limit(1);
 
-  let sessionId = found?.id as string | undefined;
-  if (!sessionId) {
-    if (kg == null) return { ok: true };
-    const { data: created, error } = await supabase
-      .from("workout_sessions")
-      .insert({ user_id: user.id, session_date: date, name: DAILY_SESSION_NAME })
-      .select("id")
-      .single();
-    if (error || !created) return { ok: false, error: error?.message ?? "Failed to create session" };
-    sessionId = created.id as string;
-  }
+    let sessionId = found?.id;
+    if (!sessionId) {
+      if (kg == null) return { ok: true as const };
+      const [created] = await db
+        .insert(workoutSessions)
+        .values({ user_id: userId, session_date: date, name: DAILY_SESSION_NAME })
+        .returning({ id: workoutSessions.id });
+      sessionId = created.id;
+    }
 
-  const { data: entry } = await supabase
-    .from("exercise_entries")
-    .select("id")
-    .eq("session_id", sessionId)
-    .eq("exercise_definition_id", definition.id)
-    .limit(1)
-    .maybeSingle();
+    const [entry] = await db
+      .select({ id: exerciseEntries.id })
+      .from(exerciseEntries)
+      .where(and(eq(exerciseEntries.session_id, sessionId), eq(exerciseEntries.exercise_definition_id, owned.id)))
+      .limit(1);
 
-  if (kg == null) {
-    if (entry) await supabase.from("exercise_entries").delete().eq("id", entry.id);
-    const { count } = await supabase
-      .from("exercise_entries")
-      .select("id", { count: "exact", head: true })
-      .eq("session_id", sessionId);
-    if (!count) await supabase.from("workout_sessions").delete().eq("id", sessionId);
-    return { ok: true };
-  }
+    if (kg == null) {
+      if (entry) await db.delete(exerciseEntries).where(eq(exerciseEntries.id, entry.id));
+      const [{ n }] = await db.select({ n: count() }).from(exerciseEntries).where(eq(exerciseEntries.session_id, sessionId));
+      if (!n) await db.delete(workoutSessions).where(eq(workoutSessions.id, sessionId));
+      return { ok: true as const };
+    }
 
-  const { error } = entry
-    ? await supabase.from("exercise_entries").update({ weight_kg: kg }).eq("id", entry.id)
-    : await supabase.from("exercise_entries").insert({
+    if (entry) {
+      await db.update(exerciseEntries).set({ weight_kg: kg }).where(eq(exerciseEntries.id, entry.id));
+    } else {
+      await db.insert(exerciseEntries).values({
+        user_id: userId,
         session_id: sessionId,
-        exercise_definition_id: definition.id,
-        name: definition.name,
+        exercise_definition_id: owned.id,
+        name: owned.name,
         sets: 1,
         weight_kg: kg,
       });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+    }
+    return { ok: true as const };
+  });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { saveBodyLog } from "@/app/actions/profile-actions";
 import type { BodyLog } from "@/types/database";
 import { localDate } from "@/lib/dates";
 
@@ -20,30 +20,15 @@ export function AddBodyLogForm({ onAdded }: AddBodyLogFormProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("body_logs")
-      .upsert(
-        {
-          user_id: user.id,
-          log_date: logDate,
-          weight_kg: weightKg ? Number(weightKg) : null,
-          notes: notes.trim() || null,
-        },
-        { onConflict: "user_id,log_date" }
-      )
-      .select()
-      .single();
+    const result = await saveBodyLog({
+      log_date: logDate,
+      weight_kg: weightKg ? Number(weightKg.replace(",", ".")) : null,
+      notes: notes.trim() || null,
+    });
 
     setLoading(false);
-    if (error) return;
-    if (data) {
-      onAdded(data);
+    if (result.ok) {
+      onAdded(result.data);
       setWeightKg("");
       setNotes("");
       setLogDate(localDate());

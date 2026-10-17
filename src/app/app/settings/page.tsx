@@ -1,29 +1,18 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { eq } from "drizzle-orm";
+import { db, schema } from "@/db";
+import { requireUser } from "@/lib/session";
 import { SettingsForm } from "@/components/settings/settings-form";
 import { SignOutButton } from "@/components/app-nav";
 
 export default async function SettingsPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: settings } = await supabase
-    .from("user_settings")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const user = await requireUser();
+  const [settings] = await db.select().from(schema.userSettings).where(eq(schema.userSettings.user_id, user.id));
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-8">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
 
-      <SettingsForm userId={user.id} initialSettings={settings} />
+      <SettingsForm initialSettings={settings ?? null} />
 
       {/* Hidden once the app runs installed (standalone). */}
       <section className="[@media(display-mode:standalone)]:hidden">
