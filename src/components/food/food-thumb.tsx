@@ -1,19 +1,25 @@
-import { imageSrc } from "@/lib/meals";
+import { FOOD_ICONS, FoodIcon, resolveFoodImage } from "@/lib/food-icons";
 
-/** Round food picture, or the food's first letter when it has none. */
+/** Round food picture: a minimal icon (tinted per food), or a scanned product's photo. */
 export function FoodThumb({ name, path, size = 40 }: { name: string; path: string | null; size?: number }) {
-  const src = imageSrc(path);
+  const image = resolveFoodImage(name, path);
+
+  if ("url" in image) {
+    return (
+      <div className="shrink-0 overflow-hidden rounded-full bg-white" style={{ width: size, height: size }}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- small product photo from Open Food Facts */}
+        <img src={image.url} alt="" loading="lazy" className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+
+  const color = FOOD_ICONS[image.icon].color;
   return (
     <div
-      className="flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--card-hover)] font-semibold text-[var(--muted)]"
-      style={{ width: size, height: size, fontSize: size * 0.4 }}
+      className="flex shrink-0 items-center justify-center rounded-full"
+      style={{ width: size, height: size, color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
     >
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element -- small static assets from /public
-        <img src={src} alt="" className="h-full w-full object-cover" />
-      ) : (
-        name.trim().charAt(0).toUpperCase() || "?"
-      )}
+      <FoodIcon icon={image.icon} className="h-[55%] w-[55%]" />
     </div>
   );
 }

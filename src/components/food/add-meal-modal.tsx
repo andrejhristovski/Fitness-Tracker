@@ -272,7 +272,7 @@ function AddMealForm({
               </label>
             ))}
           </div>
-          <FoodImagePicker value={image} onChange={setImage} label="Picture (optional)" />
+          <FoodImagePicker value={image} onChange={setImage} name={quick.name} />
         </div>
       )}
 

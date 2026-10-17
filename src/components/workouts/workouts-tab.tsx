@@ -88,11 +88,14 @@ export function WorkoutsTab({ initialDefinitions, initialHistory, initialPlans }
   const loggedToday = visible.filter((d) => history[d.id]?.some((h) => h.date === today)).length;
   const openDefinition = definitions.find((d) => d.id === openId) ?? null;
 
+  /** Optimistic: the new weight shows immediately; it's rolled back if saving fails. */
   async function saveLog(definition: ExerciseDefinition, date: string, kg: number | null) {
+    const before = history[definition.id] ?? [];
+    setHistory((prev) => ({ ...prev, [definition.id]: withLog(prev[definition.id] ?? [], date, kg) }));
     const result = await logDailyMax({ id: definition.id, name: definition.name }, date, kg);
-    if (!result.ok) setError(result.error);
-    if (result.ok) {
-      setHistory((prev) => ({ ...prev, [definition.id]: withLog(prev[definition.id] ?? [], date, kg) }));
+    if (!result.ok) {
+      setHistory((prev) => ({ ...prev, [definition.id]: before }));
+      setError(result.error);
     }
     return result.ok;
   }

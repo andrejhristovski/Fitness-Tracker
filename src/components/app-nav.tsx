@@ -89,6 +89,7 @@ export function AppNav() {
         <Link
           key={href}
           href={href}
+          prefetch
           className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
             isActive(href, exact)
               ? "bg-[var(--card)] text-[var(--accent)]"
@@ -118,6 +119,8 @@ export function BottomNav() {
             <Link
               key={href}
               href={href}
+              // Load each tab's data in the background so switching tabs is instant.
+              prefetch
               aria-current={active ? "page" : undefined}
               className={`flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition-colors ${
                 active ? "text-[var(--accent)]" : "text-[var(--muted)] active:text-[var(--foreground)]"

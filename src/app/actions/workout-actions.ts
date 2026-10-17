@@ -156,23 +156,25 @@ export async function deleteExerciseDefinition(id: string) {
  */
 export async function logDailyMax(definition: { id: string; name: string }, date: string, kg: number | null) {
   return withUser(async (userId) => {
-    const [owned] = await db
-      .select({ id: exerciseDefinitions.id, name: exerciseDefinitions.name })
-      .from(exerciseDefinitions)
-      .where(and(eq(exerciseDefinitions.id, definition.id), eq(exerciseDefinitions.user_id, userId)));
-    if (!owned) return { ok: false as const, error: "Exercise not found" };
-
-    const [found] = await db
-      .select({ id: workoutSessions.id })
-      .from(workoutSessions)
-      .where(
-        and(
-          eq(workoutSessions.user_id, userId),
-          eq(workoutSessions.session_date, date),
-          eq(workoutSessions.name, DAILY_SESSION_NAME)
+    // Independent lookups: run them in parallel.
+    const [[owned], [found]] = await Promise.all([
+      db
+        .select({ id: exerciseDefinitions.id, name: exerciseDefinitions.name })
+        .from(exerciseDefinitions)
+        .where(and(eq(exerciseDefinitions.id, definition.id), eq(exerciseDefinitions.user_id, userId))),
+      db
+        .select({ id: workoutSessions.id })
+        .from(workoutSessions)
+        .where(
+          and(
+            eq(workoutSessions.user_id, userId),
+            eq(workoutSessions.session_date, date),
+            eq(workoutSessions.name, DAILY_SESSION_NAME)
+          )
         )
-      )
-      .limit(1);
+        .limit(1),
+    ]);
+    if (!owned) return { ok: false as const, error: "Exercise not found" };
 
     let sessionId = found?.id;
     if (!sessionId) {

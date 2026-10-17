@@ -66,7 +66,8 @@ function MealForm({ foods, onSave, onClose }: Omit<CreateMealModalProps, "isOpen
       protein: r(totals.protein),
       carbs: r(totals.carbs),
       fats: r(totals.fats),
-      image_path: image ?? rows.find((x) => x.item.image_path)?.item.image_path ?? null,
+      // null = icon picked automatically from the meal's name.
+      image_path: image,
     });
     setSaving(false);
     if (err) setError(err);
@@ -143,7 +144,7 @@ function MealForm({ foods, onSave, onClose }: Omit<CreateMealModalProps, "isOpen
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">One portion</p>
             <MacroPreview n={totals} />
           </div>
-          <FoodImagePicker value={image} onChange={setImage} label="Picture (optional)" />
+          <FoodImagePicker value={image} onChange={setImage} name={name} />
         </>
       )}
 

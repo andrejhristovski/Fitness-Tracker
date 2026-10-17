@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: fitness
       POSTGRES_DB: fitness
     ports:
-      - "5432:5432"
+      # Only reachable from this computer, not from the rest of the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - fitness-db-dev:/var/lib/postgresql/data
     healthcheck:

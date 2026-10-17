@@ -1,0 +1,2 @@
+CREATE INDEX "exercise_entries_user_idx" ON "exercise_entries" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "workout_template_exercises_user_idx" ON "workout_template_exercises" USING btree ("user_id");

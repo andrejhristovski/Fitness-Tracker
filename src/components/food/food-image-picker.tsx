@@ -1,61 +1,46 @@
 "use client";
 
-import Image from "next/image";
-import { FOOD_IMAGE_PATHS, foodImageLabel } from "@/lib/food-images";
-
-const THUMB_SIZE = 56;
+import { FOOD_ICONS, FOOD_ICON_KEYS, FoodIcon, guessFoodIcon, iconPath } from "@/lib/food-icons";
 
 interface FoodImagePickerProps {
+  /** "icon:<key>", or null for automatic (guessed from the food's name). */
   value: string | null;
   onChange: (path: string | null) => void;
+  /** Food name, used to preview the automatic icon. */
+  name?: string;
   label?: string;
 }
 
-export function FoodImagePicker({
-  value,
-  onChange,
-  label = "Choose image",
-}: FoodImagePickerProps) {
+export function FoodImagePicker({ value, onChange, name = "", label = "Icon" }: FoodImagePickerProps) {
+  const auto = guessFoodIcon(name);
+  const tile = (selected: boolean) =>
+    `flex size-11 shrink-0 items-center justify-center rounded-xl border-2 transition-colors ${
+      selected ? "border-[var(--accent)] bg-[var(--accent)]/10" : "border-[var(--border)] bg-[var(--background)] hover:border-[var(--muted)]"
+    }`;
+
   return (
     <div>
-      <p className="mb-2 block text-sm font-medium text-[var(--muted)]">
-        {label}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onChange(null)}
-          className={`flex size-14 shrink-0 items-center justify-center rounded-xl border-2 text-xs text-[var(--muted)] transition-colors ${
-            value === null
-              ? "border-[var(--accent)] bg-[var(--accent)]/10"
-              : "border-[var(--border)] bg-[var(--background)] hover:border-[var(--muted)]"
-          }`}
-          title="No image"
-        >
-          None
+      <p className="mb-2 text-sm font-medium text-[var(--muted)]">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        <button type="button" onClick={() => onChange(null)} className={tile(value === null)} title="Automatic" aria-label="Automatic icon">
+          <span className="flex flex-col items-center leading-none" style={{ color: FOOD_ICONS[auto].color }}>
+            <FoodIcon icon={auto} className="h-5 w-5" />
+            <span className="mt-0.5 text-[9px] text-[var(--muted)]">Auto</span>
+          </span>
         </button>
-        {FOOD_IMAGE_PATHS.map((path) => {
-          const isSelected = value === path;
+        {FOOD_ICON_KEYS.map((key) => {
+          const path = iconPath(key);
           return (
             <button
-              key={path}
+              key={key}
               type="button"
-              onClick={() => onChange(isSelected ? null : path)}
-              className={`relative size-14 shrink-0 overflow-hidden rounded-xl border-2 transition-colors ${
-                isSelected
-                  ? "border-[var(--accent)] ring-2 ring-[var(--accent)]/30"
-                  : "border-[var(--border)] hover:border-[var(--muted)]"
-              }`}
-              title={foodImageLabel(path)}
+              onClick={() => onChange(value === path ? null : path)}
+              className={tile(value === path)}
+              title={FOOD_ICONS[key].label}
+              aria-label={FOOD_ICONS[key].label}
+              style={{ color: FOOD_ICONS[key].color }}
             >
-              <Image
-                src={path.includes(" ") ? path.split("/").map(encodeURIComponent).join("/") : path}
-                alt={foodImageLabel(path)}
-                width={THUMB_SIZE}
-                height={THUMB_SIZE}
-                sizes={`${THUMB_SIZE}px`}
-                className="size-full object-cover"
-              />
+              <FoodIcon icon={key} className="h-6 w-6" />
             </button>
           );
         })}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Food, FoodEntry } from "@/types/database";
 import type { NutritionGoals } from "@/lib/nutrition-goals";
@@ -81,14 +81,41 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     { calories: 0, protein: 0, carbs: 0, fats: 0 }
   );
 
-  async function insertEntry(entry: NewEntry): Promise<FoodEntry | null> {
-    const result = await addFoodEntry({ ...entry, log_date: logDate });
-    if (!result.ok) {
-      setError(result.error);
-      return null;
-    }
-    setEntries((prev) => [...prev, result.data]);
-    return result.data;
+  /*
+   * Optimistic updates: the screen changes immediately and the save runs in the background.
+   * If a save fails, the change is rolled back and an error is shown. New entries get a
+   * temporary id until the server returns the real one; actions on them wait for it.
+   */
+  const pendingIds = useRef(new Map<string, Promise<string | null>>());
+  const tempCounter = useRef(0);
+
+  async function resolveId(id: string) {
+    const pending = pendingIds.current.get(id);
+    return pending ? await pending : id;
+  }
+
+  function insertEntry(entry: NewEntry): Promise<FoodEntry | null> {
+    const tempId = `temp-${++tempCounter.current}`;
+    const optimistic: FoodEntry = {
+      ...entry,
+      id: tempId,
+      user_id: "",
+      log_date: logDate,
+      created_at: new Date().toISOString(),
+    };
+    setEntries((prev) => [...prev, optimistic]);
+
+    const saved = addFoodEntry({ ...entry, log_date: logDate }).then((result) => {
+      if (!result.ok) {
+        setEntries((prev) => prev.filter((e) => e.id !== tempId));
+        setError(result.error);
+        return null;
+      }
+      setEntries((prev) => prev.map((e) => (e.id === tempId ? result.data : e)));
+      return result.data;
+    });
+    pendingIds.current.set(tempId, saved.then((d) => d?.id ?? null));
+    return saved;
   }
 
   /** Insert a food row for the user, or return the one they already have with that name. */
@@ -149,9 +176,9 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
     return true;
   }
 
-  async function quickAdd(food: Food, meal: MealType = targetMeal) {
+  function quickAdd(food: Food, meal: MealType = targetMeal) {
     const amount = favoriteAmount(food);
-    const created = await insertEntry({
+    const saved = insertEntry({
       food_id: food.id,
       name: food.name,
       ...calculateNutrition(food, amount),
@@ -159,28 +186,33 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
       meal_type: meal,
       image_path: food.image_path,
     });
-    if (created) {
-      const label = MEAL_TYPES.find((m) => m.id === meal)!.label;
-      setToast({
-        text: `Added ${food.name} (${formatAmount(amount, food.base_unit)}) to ${label}`,
-        onUndo: () => deleteEntry(created.id),
-      });
-    }
+    const label = MEAL_TYPES.find((m) => m.id === meal)!.label;
+    setToast({
+      text: `Added ${food.name} (${formatAmount(amount, food.base_unit)}) to ${label}`,
+      onUndo: async () => {
+        const created = await saved;
+        if (created) deleteEntry(created.id);
+      },
+    });
   }
 
   async function deleteEntry(id: string) {
-    const result = await deleteFoodEntry(id);
+    const removed = entries.find((e) => e.id === id);
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+    const target = await resolveId(id);
+    if (!target) return true; // its insert failed, so there's nothing to delete
+    const result = await deleteFoodEntry(target);
     if (!result.ok) {
+      if (removed) setEntries((prev) => [...prev, removed].sort((a, b) => a.created_at.localeCompare(b.created_at)));
       setError(result.error);
       return false;
     }
-    setEntries((prev) => prev.filter((e) => e.id !== id));
     return true;
   }
 
   /** Delete with a few seconds to undo (Undo logs the same item again). */
-  async function removeEntry(entry: FoodEntry) {
-    if (!(await deleteEntry(entry.id))) return;
+  function removeEntry(entry: FoodEntry) {
+    deleteEntry(entry.id);
     setToast({
       text: `Removed ${entry.name}`,
       onUndo: () =>
@@ -199,12 +231,16 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
   }
 
   async function updateEntry(id: string, update: Partial<EntryUpdate>) {
-    const result = await updateFoodEntry(id, update);
+    const before = entries.find((e) => e.id === id);
+    setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...update } : e)));
+    const target = await resolveId(id);
+    if (!target) return false;
+    const result = await updateFoodEntry(target, update);
     if (!result.ok) {
+      if (before) setEntries((prev) => prev.map((e) => (e.id === target || e.id === id ? before : e)));
       setError(result.error);
       return false;
     }
-    setEntries((prev) => prev.map((e) => (e.id === id ? result.data : e)));
     return true;
   }
 
@@ -509,7 +545,10 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         recent={recent}
         prefill={prefill}
         defaultMeal={defaultMeal}
-        onAdd={async (entry) => !!(await insertEntry(entry))}
+        onAdd={async (entry) => {
+          insertEntry(entry); // shows immediately; errors appear in the banner
+          return true;
+        }}
         onEnsureFood={ensureLibraryFood}
         onFavorite={async (food, amount) => {
           await markFavorite(food, amount);
@@ -526,12 +565,13 @@ export function FoodTab({ initialEntries, initialFoods, goals, recent, logDate, 
         food={editing?.food_id ? foods.find((f) => f.id === editing.food_id) ?? null : null}
         onClose={() => setEditing(null)}
         onSave={async (update) => {
-          const ok = editing ? await updateEntry(editing.id, update) : false;
-          if (ok) setEditing(null);
-          return ok;
+          if (editing) updateEntry(editing.id, update);
+          setEditing(null);
+          return true;
         }}
         onDelete={async () => {
-          if (editing && (await deleteEntry(editing.id))) setEditing(null);
+          if (editing) removeEntry(editing);
+          setEditing(null);
         }}
       />
       <FavoriteModal

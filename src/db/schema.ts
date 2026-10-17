@@ -176,7 +176,10 @@ export const workoutTemplateExercises = pgTable(
     sort_order: integer("sort_order").notNull().default(0),
     created_at: createdAt(),
   },
-  (t) => [index("workout_template_exercises_template_idx").on(t.template_id)]
+  (t) => [
+    index("workout_template_exercises_template_idx").on(t.template_id),
+    index("workout_template_exercises_user_idx").on(t.user_id),
+  ]
 );
 
 export const workoutSessions = pgTable(
@@ -215,6 +218,8 @@ export const exerciseEntries = pgTable(
   (t) => [
     index("exercise_entries_session_idx").on(t.session_id),
     index("exercise_entries_definition_idx").on(t.exercise_definition_id),
+    // Exercise history (Workouts + Stats) loads all of a user's entries.
+    index("exercise_entries_user_idx").on(t.user_id),
   ]
 );
 
