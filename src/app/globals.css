@@ -12,9 +12,6 @@
   --accent-hover: #a5e23a;
   --on-accent: #0f1115; /* text on lime: dark, white is unreadable */
   --accent-2: #6ee7b7; /* mint, second stop of gradients */
-  /* "Purple Energy" highlight, used for the weekly goal */
-  --purple: #9b7bff;
-  --pink: #e76fff;
 }
 
 @theme inline {

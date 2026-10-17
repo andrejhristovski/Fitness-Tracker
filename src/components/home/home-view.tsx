@@ -178,7 +178,7 @@ export function HomeView({ name, today, weekStart, goals, eaten, weightKg, train
         )}
       </Link>
 
-      {/* Weekly goal (Purple Energy dots) */}
+      {/* Weekly goal (lime dots) */}
       <Link href="/app/stats" className="block rounded-2xl bg-[var(--card)] p-4 transition-colors hover:bg-[var(--card-hover)]">
         <div className="flex items-center justify-between">
           <div>
@@ -199,9 +199,9 @@ export function HomeView({ name, today, weekStart, goals, eaten, weightKg, train
                 <span
                   className={`h-8 w-8 rounded-full ${
                     done
-                      ? "bg-gradient-to-br from-[var(--purple)] to-[var(--pink)] shadow-[0_0_12px_rgba(155,123,255,0.45)]"
+                      ? "bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] shadow-[0_0_12px_rgba(183,243,74,0.4)]"
                       : isToday
-                        ? "border-[3px] border-[var(--purple)]"
+                        ? "border-[3px] border-[var(--accent)]"
                         : future
                           ? "bg-[var(--card-hover)]"
                           : "bg-[var(--card-hover)] opacity-60"
