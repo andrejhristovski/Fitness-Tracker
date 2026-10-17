@@ -24,5 +24,6 @@ export function normalizeMealType(value: string | null | undefined): MealType {
 /** Public image paths may contain spaces (e.g. "Cottage cheese.jpg"). */
 export function imageSrc(path: string | null) {
   if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path; // e.g. product photos from Open Food Facts
   return path.split("/").map(encodeURIComponent).join("/");
 }

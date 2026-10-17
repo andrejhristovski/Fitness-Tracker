@@ -5,7 +5,7 @@ import type { BodyLog, ExerciseDefinition } from "@/types/database";
 import type { MaxLog } from "@/app/actions/workout-actions";
 import type { NutritionGoals } from "@/lib/nutrition-goals";
 import { addDays, formatShortDate, lastDays, localDate } from "@/lib/dates";
-import { iconForExercise } from "@/lib/exercise-library";
+import { MUSCLE_GROUPS, iconForExercise } from "@/lib/exercise-library";
 import { MACRO_COLORS } from "@/lib/macro-colors";
 import { ExerciseIcon } from "@/components/workouts/exercise-icon";
 import { AddBodyLogForm } from "./add-body-log-form";
@@ -101,6 +101,23 @@ export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWe
   const trainedInRange = days.filter((d) => trained.has(d)).length;
   const calendarDays = lastDays(today, 7 * 13);
   const weekStart = addDays(today, -((new Date().getDay() + 6) % 7));
+
+  // ---- Muscle groups: exercises logged per muscle, this week (Mon–today) vs last week ----
+  const lastWeekStart = addDays(weekStart, -7);
+  const muscleOf = new Map(definitions.map((d) => [d.id, d.muscle_group ?? "Other"]));
+  const muscleWeeks = new Map<string, { thisWeek: number; lastWeek: number }>(
+    [...MUSCLE_GROUPS, "Other"].map((m) => [m, { thisWeek: 0, lastWeek: 0 }])
+  );
+  for (const [id, logs] of Object.entries(history)) {
+    const counts = muscleWeeks.get(muscleOf.get(id) ?? "Other");
+    if (!counts) continue;
+    for (const l of logs) {
+      if (l.date >= weekStart && l.date <= today) counts.thisWeek++;
+      else if (l.date >= lastWeekStart && l.date < weekStart) counts.lastWeek++;
+    }
+  }
+  const muscleRows = [...muscleWeeks.entries()].filter(([m, c]) => m !== "Other" || c.thisWeek + c.lastWeek > 0);
+  const muscleMax = Math.max(1, ...muscleRows.map(([, c]) => Math.max(c.thisWeek, c.lastWeek)));
   const thisWeek = lastDays(today, 7).filter((d) => d >= weekStart && trained.has(d)).length;
 
   // ---- Strength ----
@@ -323,6 +340,41 @@ export function StatsTab({ nutrition, goals, bodyLogs: initialBodyLogs, targetWe
               </table>
             </div>
           </>
+        )}
+      </Card>
+
+      {/* Muscle groups */}
+      <Card title="Muscle groups this week" subtitle="Exercises logged since Monday · grey tick = last week">
+        {withHistory.length === 0 ? (
+          <Empty>Log workouts to see which muscles you&apos;re training.</Empty>
+        ) : (
+          <ul className="space-y-2.5">
+            {muscleRows.map(([muscle, c]) => (
+              <li key={muscle} className="grid grid-cols-[5.5rem_1fr_2.5rem] items-center gap-3 text-sm">
+                <span className={c.thisWeek ? "" : "text-[var(--muted)]"}>{muscle}</span>
+                <span className="relative h-3 rounded-full bg-[var(--card-hover)]">
+                  <span
+                    className="absolute inset-y-0 left-0 rounded-full bg-[var(--accent)]"
+                    style={{ width: `${(c.thisWeek / muscleMax) * 100}%` }}
+                  />
+                  {c.lastWeek > 0 && (
+                    <span
+                      className="absolute -top-0.5 h-4 w-0.5 rounded-full bg-[var(--muted)]"
+                      style={{ left: `calc(${(c.lastWeek / muscleMax) * 100}% - 1px)` }}
+                      title={`Last week: ${c.lastWeek}`}
+                    />
+                  )}
+                </span>
+                <span className="text-right tabular-nums">
+                  {c.thisWeek ? (
+                    <span className="font-semibold">{c.thisWeek}</span>
+                  ) : (
+                    <span className="text-xs text-[var(--muted)]">none</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </Card>
 
