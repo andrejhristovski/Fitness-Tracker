@@ -6,7 +6,8 @@ import { useEffect } from "react";
 export function ServiceWorker() {
   useEffect(() => {
     if (process.env.NODE_ENV !== "production" || !("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // Always re-check sw.js itself so fixes to it reach installed apps quickly.
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {});
   }, []);
   return null;
 }

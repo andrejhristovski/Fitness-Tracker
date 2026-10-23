@@ -1,6 +1,7 @@
 import { requireUser } from "@/lib/session";
 import { AppNav, BottomNav } from "@/components/app-nav";
 import { TimezoneSync } from "@/components/timezone-sync";
+import { PullToRefresh } from "@/components/pull-to-refresh";
 
 export default async function AppLayout({
   children,
@@ -12,6 +13,7 @@ export default async function AppLayout({
   return (
     <div className="min-h-screen flex flex-col">
       <TimezoneSync />
+      <PullToRefresh />
       {/* Desktop/tablet header. On phones each page's own title acts as the header, and tabs live at the bottom. */}
       <header className="sticky top-0 z-10 hidden border-b border-[var(--border)] bg-[var(--background)]/95 backdrop-blur sm:block">
         <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-4">

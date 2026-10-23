@@ -1,6 +1,10 @@
 // Minimal service worker: makes the app installable and shows a friendly page when offline.
-// Data always comes from the network (Supabase), so nothing user-specific is cached.
-const CACHE = "fitness-shell-v1";
+// Nothing user-specific is cached; all data comes from the server.
+//
+// v2: only take over page loads when the device is offline. While online the browser loads
+// pages itself. Intercepting every navigation (including login redirects) is what Safari's
+// installed-app mode handles badly, and could leave a blank screen on resume.
+const CACHE = "fitness-shell-v2";
 const OFFLINE_URL = "/offline.html";
 
 self.addEventListener("install", (event) => {
@@ -18,6 +22,6 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.mode !== "navigate") return;
+  if (event.request.mode !== "navigate" || self.navigator.onLine) return;
   event.respondWith(fetch(event.request).catch(() => caches.match(OFFLINE_URL)));
 });

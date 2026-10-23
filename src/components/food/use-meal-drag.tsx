@@ -52,6 +52,7 @@ export function useMealDrag<T>(onDrop: (item: T, meal: MealType) => void) {
 
         const begin = (x: number, y: number) => {
           started = true;
+          document.documentElement.dataset.dragging = "1"; // tells pull-to-refresh to stand down
           navigator.vibrate?.(25);
           current = { item, label, x, y, over: mealAt(x, y) };
           setDrag(current);
@@ -82,6 +83,7 @@ export function useMealDrag<T>(onDrop: (item: T, meal: MealType) => void) {
 
         function cleanup() {
           clearTimeout(holdTimer);
+          delete document.documentElement.dataset.dragging;
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
           window.removeEventListener("pointercancel", cleanup);

@@ -37,8 +37,18 @@ body {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   overscroll-behavior-y: none;
+  /* Like a native app: long-press doesn't select text or open the copy/share callout. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
-.test {
-  background-color: blue;
+/* ...but text fields still need normal selection, cursor placement and paste. */
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
